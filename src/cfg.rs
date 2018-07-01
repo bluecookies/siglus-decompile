@@ -101,7 +101,10 @@ impl ControlFlowGraph {
 
 		// Construct the actual statements
 		let mut constructor = StatementConstructor::new();
-		constructor.construct_statements(self, self.entry)
+		let mut statements = constructor.construct_statements(self, self.entry);
+		constructor.remove_labels(&mut statements);
+
+		statements
 	}
 
 
@@ -299,18 +302,18 @@ impl ControlFlowGraph {
 
 
 struct StatementConstructor {
-	curr_line: usize,
-	block_lines: HashMap<NodeIndex, usize>,
+	block_done: HashSet<NodeIndex>,
 	if_follow: Vec<NodeIndex>,
 	latch_node: Vec<NodeIndex>,
+	gotos: HashSet<NodeIndex>,
 }
 impl StatementConstructor {
 	fn new() -> StatementConstructor {
 		StatementConstructor {
-			curr_line: 1,
-			block_lines: HashMap::new(),
+			block_done: HashSet::new(),
 			if_follow: Vec::new(),
 			latch_node: Vec::new(),
+			gotos: HashSet::new(),
 		}
 	}
 
@@ -327,28 +330,25 @@ impl StatementConstructor {
 			// Break if reached the follow node *BEFORE* visiting
 			if self.if_follow.last() == Some(&index) {
 				break;
-			} else if let Some(&goto_line) = self.block_lines.get(&index) {
-				warn!("Block #{} already printed!", index.index());
-				result.push(Statement::goto(goto_line, index));
-				self.curr_line += 1;
+			} else if self.block_done.contains(&index) {
+				result.push(Statement::goto(index));
+				self.gotos.insert(index);
 				break;
 			}
 
-			//result.push(Statement::Label(index));
-			self.block_lines.insert(index, self.curr_line);
+			result.push(Statement::label(index));
+			self.block_done.insert(index);
 
 			if let Some(ref loop_ref) = cfg.loops.iter().find(|&ref loop_ref| loop_ref.head == index) {
 				let loop_statement = match loop_ref.loop_type {
 					LoopType::PreTested => panic!("Pre test loop not handled yet!"),	//TODO: handle
 					LoopType::PostTested => {
 						let mut loop_contents = Vec::new();
-						self.curr_line += 1;	// do {
 						for inst in block.instructions.iter() {
 							if let &Instruction::Line(line) = inst {
 								line_num = Some(line as usize);
 							} else {
 								loop_contents.push(Statement::new(inst.clone(), line_num.take()));
-								self.curr_line += 1;
 							}
 						}
 
@@ -378,7 +378,6 @@ impl StatementConstructor {
 						} else {
 							loop_ref.condition.clone().negate()
 						};
-						self.curr_line += 1;	// } while (condition) -  TODO: this is horrible
 
 						Statement {
 							s_type: StatementType::Loop(LoopStatement::DoWhile {
@@ -400,7 +399,6 @@ impl StatementConstructor {
 						line_num = Some(line as usize);
 					} else {
 						result.push(Statement::new(inst.clone(), line_num.take()));
-						self.curr_line += 1;	// TODO: maybe multiple line statements
 					}
 				}
 
@@ -439,11 +437,9 @@ impl StatementConstructor {
 
 									let mut then_block;
 									// TODO: find a proper way to do this
-									// if (condition) {
-									self.curr_line += 1;
-									if let Some(&goto_line) = self.block_lines.get(&then_index) {
-										self.curr_line += 1;
-										then_block = vec![Statement::goto(goto_line, then_index)];
+									if self.block_done.contains(&then_index) {
+										then_block = vec![Statement::goto(then_index)];
+										self.gotos.insert(then_index);
 									} else if then_index != block_follow {
 										self.if_follow.push(block_follow);
 										then_block = self.construct_statements(cfg, then_index);
@@ -463,15 +459,14 @@ impl StatementConstructor {
 									};
 
 									let mut else_block;
-									if let Some(&goto_line) = self.block_lines.get(&else_index) {
+									if self.block_done.contains(&else_index) {
 										if !empty_then {	// didn't just write it
-											self.curr_line += 2;
-											else_block = Some(vec![Statement::goto(goto_line, else_index)]);
+											else_block = Some(vec![Statement::goto(else_index)]);
+											self.gotos.insert(else_index);
 										} else {
 											else_block = None;
 										}
 									} else if else_index != block_follow {
-										self.curr_line += 1;
 										self.if_follow.push(block_follow);
 										else_block = Some(self.construct_statements(cfg, else_index));
 										self.if_follow.pop();
@@ -486,8 +481,6 @@ impl StatementConstructor {
 									(then_block, else_block)
 								}
 							};
-
-							self.curr_line += 1; // for closing brace
 
 							IfStatement {
 								condition,
@@ -515,6 +508,28 @@ impl StatementConstructor {
 		}
 
 		result
+	}
+
+	fn remove_labels(&self, statements: &mut Vec<Statement>) {
+		// poor man's retain_mut/drain_filter
+		let mut i = 0;
+		while i != statements.len() {
+			let to_remove = {
+				let s = &mut statements[i];
+				match s.s_type {
+					StatementType::Label(ref label) => !self.gotos.contains(label),
+					StatementType::If(ref mut statement) => {statement.remove_labels(self); false},
+					StatementType::Loop(ref mut statement) => {statement.remove_labels(self); false},
+					StatementType::Inst(_) => false,
+					StatementType::Goto(_) => false,
+				}
+			};
+			if to_remove {
+				statements.remove(i);
+			} else {
+				i += 1;
+			}
+		}
 	}
 }
 
@@ -1038,13 +1053,23 @@ enum StatementType {
 	Inst(Instruction),
 	If(IfStatement),
 	Loop(LoopStatement),
-	Goto(usize, NodeIndex),
+	Goto(NodeIndex),
+	Label(NodeIndex),
 }
 
 struct IfStatement {
 	condition: Expression,
 	then_block: Vec<Statement>,
 	else_block: Option<Vec<Statement>>
+}
+
+impl IfStatement {
+	fn remove_labels(&mut self, ctor: &StatementConstructor) {
+		ctor.remove_labels(&mut self.then_block);
+		if let Some(ref mut block) = self.else_block {
+			ctor.remove_labels(block);
+		}
+	}
 }
 
 enum LoopStatement {
@@ -1067,6 +1092,12 @@ impl LoopStatement {
 		}
 		Ok(())
 	}
+
+	fn remove_labels(&mut self, ctor: &StatementConstructor) {
+		match self {
+			LoopStatement::DoWhile { ref mut block, .. } => ctor.remove_labels(block)
+		}
+	}
 }
 
 
@@ -1078,10 +1109,17 @@ impl Statement {
 		}
 	}
 
-	fn goto(line: usize, block: NodeIndex) -> Statement {
-		warn!("Creating a goto for line {}", line);
+	fn goto(block: NodeIndex) -> Statement {
+		warn!("Creating a goto for block {}", block.index());
 		Statement {
-			s_type: StatementType::Goto(line, block),
+			s_type: StatementType::Goto(block),
+			line_num: None
+		}
+	}
+
+	fn label(block: NodeIndex) -> Statement {
+		Statement {
+			s_type: StatementType::Label(block),
 			line_num: None
 		}
 	}
@@ -1109,7 +1147,8 @@ impl Statement {
 				write!(out, "{}}}\n", "\t".repeat(indent))?;
 			},
 			StatementType::Loop(ref statement) => statement.write(out, indent)?,
-			StatementType::Goto(line, block) => write!(out, "{}goto line {} (Block #{})\n", "\t".repeat(indent), line, block.index())?
+			StatementType::Goto(block) => write!(out, "{}goto label_{} \n", "\t".repeat(indent), block.index())?,
+			StatementType::Label(block) => write!(out, "{}label_{}: \n", "\t".repeat(indent), block.index())?,
 		}
 		Ok(())
 	}

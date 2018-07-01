@@ -31,7 +31,7 @@ type Result<T> = std::result::Result<T, Box<std::error::Error>>;
 mod cfg;
 mod expression;
 use cfg::{ControlFlowGraph, Instruction, CFGWriter};
-use expression::{Expression, BinaryOp};
+use expression::{Expression, BinaryOp, FunctionType};
 
 
 #[derive(Debug)]
@@ -150,7 +150,7 @@ struct Function {
 
 impl Function {
 	fn to_expression(&self) -> Expression {
-		Expression::Function(self.name.clone())
+		Expression::Function(FunctionType::Named(self.name.clone()))
 	}
 }
 
@@ -298,13 +298,18 @@ fn main() {
 		let mut graph = script.parse_bytecode(&global_vars, &global_functions).expect("Error parsing bytecode.");
 
 		// Structure loops and two ways
-		graph.structure_statements();
+		let statements = graph.structure_statements();
 
 		let mut out = File::create(format!("Scene/{}.ss", scene_name)).expect("Could not create output file for writing");
 		CFGWriter::new(&mut out, &graph).write().expect("Error writing to file.");
 
 		out = File::create(format!("Scene/{}.gv", scene_name)).expect("Could not create output file for writing");
 		graph.write_graph(&mut out).expect("Error writing graph.");
+
+		out = File::create(format!("Scene/{}.ss2", scene_name)).expect("Could not create output file for writing");
+		for s in statements {
+			s.write(&mut out, 0).expect("");
+		}
 	}
 }
 
@@ -797,12 +802,10 @@ impl Script {
 						
 						let value = stack.pop(VariableType::Int);
 
-						let rhs = if opcode == 0x11 { 0 } else { 1 };
-
-						let condition = Expression::BinaryExpr{
-							lhs: Box::new(value), 
-							rhs: Box::new(Expression::RawInt(rhs)), 
-							op: BinaryOp::Eq
+						let condition = if opcode == 0x11 {
+							value.negate()
+						} else {
+							value
 						};
 
 						graph.add_branch(block_id, condition, jump_block_id, next_block_id);
@@ -827,17 +830,7 @@ impl Script {
 						// TODO: visit this block
 						//block_list.push((call_address, stack.clone()));
 
-						// TODO: pretty up
-						let function = Box::new(Expression::Function(format!("FUNC_{}", call_label)));
-						let call = Expression::FunctionCall{
-							function, 
-							option: 0, 
-							args, 
-							extra_params: Vec::new(), 
-							return_type:
-							VariableType::Unknown, 
-							extra: None
-						};
+						let call = Expression::procedure_call(call_label, args);
 						stack.push(call);
 					},
 					// Return
@@ -985,6 +978,10 @@ impl<'a> ProgStack<'a> {
 		}
 	}
 
+	fn peek_type(&self) -> Option<VariableType> {
+		self.values.last().map(|value| value.get_type())
+	}
+
 	fn push(&mut self, value: Expression) {
 		self.values.push(value);
 	}
@@ -1001,14 +998,16 @@ impl<'a> ProgStack<'a> {
 		self.values.append(&mut dup);
 	}
 
+	// TODO: better error handling - possible return Result<Option<Expression>> or even Result<Expression>
 	fn handle_frame(&mut self) -> Option<Expression> {
-		let frame = self.values.split_off(self.frames.pop().unwrap());
+		let depth = self.frames.pop().unwrap();
+		let frame = self.values.split_off(depth);
 
 		let mut iter = frame.into_iter();
 		let mut value = if let Some(Expression::RawInt(value)) =  iter.next() {
 			let (value_type, index) = (value >> 24, (value & 0x00FFFFFF) as usize);
 			match value_type {
-				0x00 => Expression::RawInt(index as i32),
+				0x00 => Expression::System(index as i32),
 				0x7E => self.global_funcs[index].to_expression(),
 				0x7F => self.global_vars[index].to_expression(),
 				_ => panic!("Unexpected value {:#08x}", value)
@@ -1080,24 +1079,12 @@ impl<'a> ProgStack<'a> {
 					}
 				}
 			},
+			// TODO: handle stage_elem_list
 			VariableType::StageElem => {
-				let value = self.pop(VariableType::Unknown);
-				if value.get_type() == VariableType::StageElem {
-					value
+				if self.peek_type() == Some(VariableType::StageElem) {
+					self.pop(VariableType::StageElem)
 				} else {
-					// could be stage element list but meh
-					if let Some(parent) = self.handle_frame() {
-						// this is odd
-						Expression::BinaryExpr {
-							lhs: Box::new(parent),
-							rhs: Box::new(value),
-							op: BinaryOp::Member
-						}
-					} else {
-						// TODO: fix this as well as the whole handling thing - look externally
-						// plus create an "element" type
-						value
-					}
+					self.handle_frame().unwrap()
 				}
 			}
 		}
@@ -1127,11 +1114,12 @@ fn create_variable(value: Expression) -> (Expression, Instruction) {
 	(var, bind_inst)
 }
 
+// TODO: this might not actually belong here - might be non system agnostic
 
 // Checks if a function has an extra annoying (counter?) thing that makes the size
 // of the instructions not known without looking at the stack
 fn check_function_extra(function: &Expression) -> bool {
-	if let &Expression::RawInt(f) = function {
+	if let &Expression::System(f) = function {
 		if f == 0xc || f == 0x12 || f == 0x4c {
 			true
 		} else {

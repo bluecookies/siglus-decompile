@@ -9,6 +9,8 @@
 // TODO: actually look for the TODO's to fix
 // 	need to actually fix them
 
+// TODO: handle procedures
+
 extern crate getopts;
 extern crate byteorder;
 extern crate itertools;
@@ -17,7 +19,7 @@ extern crate petgraph;
 
 #[macro_use]
 extern crate log;
-extern crate simple_logger;
+extern crate fern;
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Cursor};
@@ -195,6 +197,35 @@ fn print_usage(program: &str, opts: Options) {
 	println!("{}", opts.usage(&brief));
 }
 
+fn setup_logger() -> Result<()> {
+	fern::Dispatch::new()
+		.format(|out, message, record| {
+			out.finish(format_args!(
+				"[{}][{}] {}",
+				record.target(),
+				record.level(),
+				message
+			))
+		})
+		.chain(
+			fern::Dispatch::new()
+				.level(log::LevelFilter::Debug)
+				.chain(std::io::stdout())
+		)
+		.chain(
+			fern::Dispatch::new()
+				.level(log::LevelFilter::Trace)
+				//.level_for("siglus_decompile", log::LevelFilter::Trace)
+				.chain(std::fs::OpenOptions::new()
+					.write(true)
+					.create(true)
+					.open("output.log")?
+				)
+		)
+		.apply()?;
+	Ok(())
+}
+
 fn main() {
 	let mut args = std::env::args();
 	let prog_name = args.next().unwrap();
@@ -212,7 +243,7 @@ fn main() {
 		return;
 	}
 
-	simple_logger::init().unwrap();
+	setup_logger().unwrap();
 
 	let decrypt_key: Option<Vec<u8>> = matches.opt_str("k").map(|keyfile| {
 		let mut keyfile = File::open(keyfile).expect("Could not open key!");

@@ -6,5 +6,7 @@
 
 *.key
 *.pck
+*.png
 
 *.txt
+*.log

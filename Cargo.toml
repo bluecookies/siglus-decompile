@@ -7,6 +7,6 @@ authors = ["bluecookies <landentire@gmail.com>"]
 getopts = "0.2"
 byteorder = "1"
 log = "0.4"
-simple_logger = "0.5"
+fern = "0.5"
 itertools = "0.7.8"
 petgraph = "0.4.12"

@@ -102,7 +102,7 @@ impl ControlFlowGraph {
 		// Construct the actual statements
 		let mut constructor = StatementConstructor::new();
 		let mut statements = constructor.construct_statements(self, self.entry);
-		constructor.remove_labels(&mut statements);
+		simplify_statements(&mut statements, &constructor);
 
 		statements
 	}
@@ -162,9 +162,11 @@ impl ControlFlowGraph {
 				// This is equivalent to finding the first node in a post-ordering.
 				//	i think
 
+				let mut post_order = self.post_order().into_iter();
+
 				// TODO: only need to check the nodes up to node I think, since 
 				//  any nodes after that won't be dominated since they come before
-				if let Some(follow) = self.post_order().into_iter().find(|&index|
+				if let Some(follow) = post_order.find(|&index|
 					self.graph.edges_directed(index, Direction::Incoming).count() >= 2
 						&&
 					dominators.immediate_dominator(index) == Some(node)
@@ -172,16 +174,27 @@ impl ControlFlowGraph {
 					self.loop_head.get(&index) != Some(&index)
 
 				) {
-					// Set all unresolved nodes' follow node to this one
+					// Set the follow node of all unresolved nodes that lie between the head and the follow
 					self.if_follow.insert(node, follow);
-					for x in unresolved.drain() {
-						self.if_follow.insert(x, follow);
+					let mut resolved = Vec::new();
+					while let Some(n) = post_order.next() {
+						if n == node {
+							break;
+						}
+						if unresolved.remove(&n) {
+							self.if_follow.insert(n, follow);
+							resolved.push(n.index());
+						}
 					}
-
+					trace!("If follow node found for {}: {}. Inserting {:?}", 
+						node.index(), follow.index(), resolved);
 				} else {
 					unresolved.insert(node);
 				}
 			}
+		}
+		if !unresolved.is_empty() {
+			warn!("Unresolved 2-way nodes: {:?}", set2vec(&unresolved));
 		}
 	}
 
@@ -214,6 +227,9 @@ impl ControlFlowGraph {
 				break;
 			}
 		}
+
+		trace!("Found loop - Head: {}, Latch: {}, Nodes: {:?}", 
+			head.index(), latch.index(), set2vec(&nodes_in_loop));
 
 		// Find loop type
 		let loop_type = {
@@ -307,6 +323,7 @@ struct StatementConstructor {
 	latch_node: Vec<NodeIndex>,
 	gotos: HashSet<NodeIndex>,
 }
+
 impl StatementConstructor {
 	fn new() -> StatementConstructor {
 		StatementConstructor {
@@ -382,7 +399,7 @@ impl StatementConstructor {
 						Statement {
 							s_type: StatementType::Loop(LoopStatement::DoWhile {
 								condition,
-								block: loop_contents
+								body: loop_contents
 							}),
 							line_num: None
 						}
@@ -508,28 +525,6 @@ impl StatementConstructor {
 		}
 
 		result
-	}
-
-	fn remove_labels(&self, statements: &mut Vec<Statement>) {
-		// poor man's retain_mut/drain_filter
-		let mut i = 0;
-		while i != statements.len() {
-			let to_remove = {
-				let s = &mut statements[i];
-				match s.s_type {
-					StatementType::Label(ref label) => !self.gotos.contains(label),
-					StatementType::If(ref mut statement) => {statement.remove_labels(self); false},
-					StatementType::Loop(ref mut statement) => {statement.remove_labels(self); false},
-					StatementType::Inst(_) => false,
-					StatementType::Goto(_) => false,
-				}
-			};
-			if to_remove {
-				statements.remove(i);
-			} else {
-				i += 1;
-			}
-		}
 	}
 }
 
@@ -1043,7 +1038,7 @@ impl<'a, 'b, F> CFGWriter<'a, 'b, F> where F: Write {
 
 //======================================================================
 
-
+// These aren't really statements, I picked a bad name
 pub struct Statement {
 	s_type: StatementType,
 	line_num: Option<usize>,
@@ -1064,10 +1059,13 @@ struct IfStatement {
 }
 
 impl IfStatement {
-	fn remove_labels(&mut self, ctor: &StatementConstructor) {
-		ctor.remove_labels(&mut self.then_block);
+	fn apply_func_to_blocks<F>(&mut self, mut func: F)
+	where 
+		F: FnMut(&mut Vec<Statement>) -> (),
+	{
+		func(&mut self.then_block);
 		if let Some(ref mut block) = self.else_block {
-			ctor.remove_labels(block);
+			func(block);
 		}
 	}
 }
@@ -1075,27 +1073,50 @@ impl IfStatement {
 enum LoopStatement {
 	DoWhile {
 		condition: Expression,
-		block: Vec<Statement>
+		body: Vec<Statement>
+	},
+	For {
+		// Header
+		init: Option<Instruction>,
+		condition: Expression,
+		after: Option<Instruction>,
+
+		body: Vec<Statement>,
 	}
 }
 
 impl LoopStatement {
-	fn write<F: Write>(&self, out: &mut F, indent: usize) -> Result<()> {
+	fn write<F: Write>(&self, out: &mut F, indent: usize, comment: String) -> Result<()> {
 		match *self {
-			LoopStatement::DoWhile { ref condition, ref block } => {
-				write!(out, "{}do {{ \n", "\t".repeat(indent))?;
-				for s in block.iter() {
+			LoopStatement::DoWhile { ref condition, ref body } => {
+				write!(out, "{}do {{ {}\n", "\t".repeat(indent), comment)?;
+				for s in body.iter() {
 					s.write(out, indent + 1)?;
 				}
 				write!(out, "{}}} while ({}) \n", "\t".repeat(indent), condition)?;
-			}
+			},
+			LoopStatement::For { ref init, ref condition, ref after, ref body } => {
+				let init_str = if let Some(inst) = init { format!("{}", inst) } else { String::new() };
+				let next_str = if let Some(inst) = after { format!("{}", inst) } else { String::new() };
+				
+				write!(out, "{}for({};{};{}) {{ {}\n", "\t".repeat(indent), init_str, condition, next_str, comment)?;
+				for s in body.iter() {
+					s.write(out, indent + 1)?;
+				}
+				write!(out, "{}}} \n", "\t".repeat(indent))?;
+			},
 		}
 		Ok(())
 	}
 
-	fn remove_labels(&mut self, ctor: &StatementConstructor) {
+	fn apply_func_to_blocks<F>(&mut self, mut func: F)
+	where 
+		F: FnMut(&mut Vec<Statement>) -> (),
+	{
 		match self {
-			LoopStatement::DoWhile { ref mut block, .. } => ctor.remove_labels(block)
+			LoopStatement::DoWhile { ref mut body, .. } => func(body),
+			LoopStatement::For { ref mut body, .. } => func(body),
+
 		}
 	}
 }
@@ -1146,10 +1167,96 @@ impl Statement {
 				}
 				write!(out, "{}}}\n", "\t".repeat(indent))?;
 			},
-			StatementType::Loop(ref statement) => statement.write(out, indent)?,
+			StatementType::Loop(ref statement) => statement.write(out, indent, comment)?,
 			StatementType::Goto(block) => write!(out, "{}goto label_{} \n", "\t".repeat(indent), block.index())?,
 			StatementType::Label(block) => write!(out, "{}label_{}: \n", "\t".repeat(indent), block.index())?,
 		}
 		Ok(())
 	}
+}
+
+
+// Simplification
+fn simplify_statements(block: &mut Vec<Statement>, ctor: &StatementConstructor) {
+	remove_labels(block, &ctor.gotos);
+
+	construct_for_loops(block);
+}
+
+fn remove_labels(statements: &mut Vec<Statement>, gotos: &HashSet<NodeIndex>) {
+	// poor man's retain_mut/drain_filter
+	let mut i = 0;
+	while i != statements.len() {
+		let to_remove = {
+			let s = &mut statements[i];
+			match s.s_type {
+				StatementType::Label(ref label) => !gotos.contains(label),
+				StatementType::If(ref mut statement) => {statement.apply_func_to_blocks(|block| remove_labels(block, gotos)); false},
+				StatementType::Loop(ref mut statement) => {statement.apply_func_to_blocks(|block| remove_labels(block, gotos)); false},
+				StatementType::Inst(_) => false,
+				StatementType::Goto(_) => false,
+			}
+		};
+		if to_remove {
+			statements.remove(i);
+		} else {
+			i += 1;
+		}
+	}
+}
+
+fn construct_for_loops(block: &mut Vec<Statement>) {
+	// Contruct for loops from the following
+	//	if (some_condition) {
+	//		do {
+	//			do_something();
+	//		} while (some_condition);
+	//	}
+	//	=>
+	//	for (;some_condition;) {
+	//		do_something();
+	//	}
+	// TODO: clean up this mess
+	for s in block.iter_mut() {
+		let s_type = &mut s.s_type;
+		let for_loop = match *s_type {
+			StatementType::If(ref mut statement) => 
+				convert_if_to_for(statement)
+					.or_else(|| {statement.apply_func_to_blocks(construct_for_loops); None}),
+			StatementType::Loop(ref mut statement) => {statement.apply_func_to_blocks(construct_for_loops); None},
+			_ => None,
+		};
+
+		if let Some(s) = for_loop {
+			std::mem::replace(s_type, StatementType::Loop(s));
+		}
+	}
+
+	// Leaves the if statement in a broken state if Some(Loop) is returned
+	fn convert_if_to_for(if_statement: &mut IfStatement) -> Option<LoopStatement> {
+		if if_statement.then_block.len() != 1 || !if_statement.else_block.is_none() {
+			return None;
+		}
+		let if_cond = &if_statement.condition;
+		if let Statement { s_type: StatementType::Loop(ref mut loop_statement), ..} = if_statement.then_block[0] {
+			if let LoopStatement::DoWhile { condition, body } = loop_statement {
+				if condition == if_cond {
+					construct_for_loops(body);
+
+					return Some(LoopStatement::For {
+						init: None,
+						condition: std::mem::replace(condition, Expression::Error),
+						after: None,
+						body: std::mem::replace(body, Vec::new())
+					});
+				}
+			}
+		}
+		None
+	}
+}
+
+// Util
+fn set2vec(set: &HashSet<NodeIndex>) -> Vec<usize> {
+	set.iter().cloned().map(NodeIndex::index).collect::<Vec<usize>>()
 }

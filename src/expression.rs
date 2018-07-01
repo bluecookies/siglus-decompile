@@ -4,7 +4,7 @@ use ::VariableType;
 use ::cfg::Instruction;
 
 ////////////////////////////////////////////////////////////////////////////////
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Expression {
 	RawInt(i32),
 	RawString(String),
@@ -33,7 +33,7 @@ pub enum Expression {
 	Error
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum FunctionType {
 	//System(i32),
 	Procedure(usize),
@@ -338,7 +338,7 @@ impl std::fmt::Display for BinaryOp {
 }
 
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum UnaryOp {
 	// Identity,
 	Negate,

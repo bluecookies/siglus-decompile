@@ -1,7 +1,10 @@
 use std;
 
+use ::Variable;
 use ::VariableType;
+use ::Function;
 use ::cfg::Instruction;
+use ::format_list;
 
 ////////////////////////////////////////////////////////////////////////////////
 #[derive(Clone, Debug, PartialEq)]
@@ -30,7 +33,13 @@ pub enum Expression {
 		extra: Option<u32>
 	},
 	System(i32),
-	Error
+	List(Vec<Expression>),
+	Error,
+
+
+	LocalVarRef(usize),
+	FunctionRef(usize),
+	GlobalVarRef(usize),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -66,7 +75,12 @@ impl Expression {
 			Expression::Function(_) => panic!("Function being checked! Check it out."),
 			Expression::FunctionCall { .. } => true,
 			Expression::System(_) => false,
-			Expression::Error => true
+			Expression::List(_) => true,	// lists always have side effects for simplicity
+			Expression::Error => true,
+
+			Expression::LocalVarRef(_) |
+			Expression::FunctionRef(_) |
+			Expression::GlobalVarRef(_) => false,
 		}
 	}
 
@@ -98,7 +112,12 @@ impl Expression {
 			Expression::Function(_) => panic!(),
 			Expression::FunctionCall { return_type, .. } => return_type,
 			Expression::System(_) => VariableType::Unknown,
+			Expression::List(_) => VariableType::Unknown,
 			Expression::Error => VariableType::Error,
+
+			Expression::LocalVarRef(_) |
+			Expression::FunctionRef(_) |
+			Expression::GlobalVarRef(_) => VariableType::Unknown,			
 		}
 	}
 
@@ -125,14 +144,20 @@ impl Expression {
 			0x03 => BinaryOp::Mul,
 			0x04 => BinaryOp::Div,
 			0x05 => BinaryOp::Rem,
-			0x10 => BinaryOp::Neq,
-			0x11 => BinaryOp::Eq,
-			0x12 => BinaryOp::Leq,
-			0x13 => BinaryOp::Lt,
-			0x14 => BinaryOp::Geq,
-			0x15 => BinaryOp::Gt,
+			0x10 => BinaryOp::Eq,
+			0x11 => BinaryOp::Neq,
+			0x12 => BinaryOp::Gt,
+			0x13 => BinaryOp::Geq,
+			0x14 => BinaryOp::Lt,
+			0x15 => BinaryOp::Leq,
 			0x20 => BinaryOp::And,
 			0x21 => BinaryOp::Or,
+			0x31 => BinaryOp::BitwiseAnd,
+			0x32 => BinaryOp::BitwiseOr,
+			0x33 => BinaryOp::BitwiseXor,
+			0x34 => BinaryOp::LeftShift,
+			0x35 => BinaryOp::RightShift,
+			0x36 => BinaryOp::UnsignedRightShift,
 			_    => {
 				error!("Unknown integer binary operation: {:#02x}", op);
 				return Expression::Error
@@ -149,7 +174,8 @@ impl Expression {
 	pub fn calc2_str(lhs: Expression, rhs: Expression, op: u8) -> Expression {
 		let op = match op {
 			0x01 => BinaryOp::Add,
-			0x11 => BinaryOp::Eq,
+			0x10 => BinaryOp::Eq,
+			0x11 => BinaryOp::Neq,
 			_    => {
 				error!("Unknown string binary operation: {:#02x}", op);
 				return Expression::Error
@@ -215,9 +241,64 @@ impl Expression {
 					BinaryOp::Leq => 7,
 					BinaryOp::And => 2,
 					BinaryOp::Or => 1,
+					BinaryOp::BitwiseOr => 3,
+					BinaryOp::BitwiseXor => 4,
+					BinaryOp::BitwiseAnd => 5,
+					BinaryOp::LeftShift => 8,
+					BinaryOp::RightShift => 8,
+					BinaryOp::UnsignedRightShift => 8,
 				}
 			},
 			_ => 0xFF
+		}
+	}
+}
+
+impl Expression {
+	pub fn replace_ref(&mut self, global_vars: &[Variable], functions: &[Function], local_vars: &[Variable]) {
+		match *self {
+			Expression::RawInt(_) => (),
+			Expression::RawString(_) => (),
+			Expression::Variable { .. } => (),
+			Expression::UnaryExpr { ref mut value, .. } => value.replace_ref(global_vars, functions, local_vars),
+			Expression::BinaryExpr { ref mut lhs, ref mut rhs, .. } => {
+				lhs.replace_ref(global_vars, functions, local_vars);
+				rhs.replace_ref(global_vars, functions, local_vars);
+			},
+			Expression::Function(_) => (),
+			Expression::FunctionCall { ref mut function, ref mut args, .. } => {
+				function.replace_ref(global_vars, functions, local_vars);
+				for expr in args.iter_mut() {
+					expr.replace_ref(global_vars, functions, local_vars);
+				}
+			},
+			Expression::System(_) => (),
+			Expression::List(ref mut vec) => for expr in vec.iter_mut() {
+				expr.replace_ref(global_vars, functions, local_vars);
+			},
+			Expression::Error => (),
+
+			Expression::LocalVarRef(index) => {
+				if index < local_vars.len() {
+					*self = local_vars[index].to_expression();
+				} else {
+					warn!("Local var reference {} out of range.", index);
+				}
+			},
+			Expression::FunctionRef(index) => {
+				if index < functions.len() {
+					*self = functions[index].to_expression();
+				} else {
+					warn!("Function reference {:#x} out of range.", index);
+				}
+			},
+			Expression::GlobalVarRef(index) => {
+				if index < global_vars.len() {
+					*self = global_vars[index].to_expression();
+				} else {
+					warn!("Global var reference {} out of range.", index);
+				}
+			},
 		}
 	}
 }
@@ -251,6 +332,10 @@ impl std::fmt::Display for Expression {
 				}
 			},
 			Expression::BinaryExpr{ref lhs, ref rhs, op} => {
+				if op == BinaryOp::Member {
+					return write!(f, "{:#x}{}{:#x}", lhs.as_ref(), op, rhs.as_ref());
+				}
+
 				let precedence = self.precedence();
 
 				let left_expr = if precedence > lhs.precedence() {
@@ -275,6 +360,7 @@ impl std::fmt::Display for Expression {
 							format!("{}", rhs)
 						}
 					};
+
 					write!(f, "{}{}{}", left_expr, op, right_expr)
 				}
 			},
@@ -288,7 +374,74 @@ impl std::fmt::Display for Expression {
 				write!(f, "{}{}({}){}{}", function, option_str, format_list(args), extra_param_str, extra_str)
 			},
 			Expression::System(num) => write!(f, "sys_{:#x}", num),
-			Expression::Error => write!(f, "ERROR")
+			Expression::List(ref vec) => write!(f, "{{{}}}", format_list(vec)),
+			Expression::Error => write!(f, "ERROR"),
+
+			Expression::LocalVarRef(idx) => write!(f, "local_var[{}]", idx),
+			Expression::FunctionRef(idx) => write!(f, "function_{:#x}", idx),
+			Expression::GlobalVarRef(idx) => write!(f, "global_var[{:#x}]", idx),
+		}
+	}
+}
+
+impl std::fmt::LowerHex for Expression {
+	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+		match *self {
+			Expression::RawInt(num) => write!(f, "{:#x}", num),
+			Expression::RawString(ref string) => write!(f, "\"{}\"", string),
+			Expression::Variable{ref name, .. } => write!(f, "{}", name),
+			Expression::UnaryExpr{ref value, op} => {
+				if self.precedence() > value.precedence() {
+					write!(f, "{}({:#x})", op, value.as_ref())
+				} else {
+					write!(f, "{}{:#x}", op, value.as_ref())
+				}
+			},
+			Expression::BinaryExpr{ref lhs, ref rhs, op} => {
+				let precedence = self.precedence();
+
+				let left_expr = if precedence > lhs.precedence() {
+					format!("({:#x})", lhs.as_ref())
+				} else {
+					format!("{:#x}", lhs.as_ref())
+				};
+
+				if op == BinaryOp::Index {
+					write!(f, "{}[{:#x}]", left_expr, rhs.as_ref())
+				} else {
+					let right_precedence = rhs.precedence();
+					let right_expr = if precedence > right_precedence {
+						format!("({:#x})", rhs.as_ref())
+					} else if precedence < right_precedence {
+						format!("{:#x}", rhs.as_ref())
+					} else {
+						// Non associative
+						if op == BinaryOp::Sub || op == BinaryOp::Div || op == BinaryOp::Member {
+							format!("({:#x})", rhs.as_ref())
+						} else {
+							format!("{:#x}", rhs.as_ref())
+						}
+					};
+
+					write!(f, "{}{}{}", left_expr, op, right_expr)
+				}
+			},
+			Expression::Function(ref func_type) => write!(f, "{}", func_type),
+			Expression::FunctionCall {
+				ref function, option, ref args, ref extra_params, extra, ..
+			} => {
+				let option_str = if option == 0 { String::new() } else { format!("{{{}}}", option) };
+				let extra_param_str = if extra_params.is_empty() { String::new() } else { format!("<{}>", format_list(extra_params)) };
+				let extra_str = if let Some(extra) = extra { format!(", {}", extra) } else { String::new() };
+				write!(f, "{:#x}{}({}){}{}", function.as_ref(), option_str, format_list(args), extra_param_str, extra_str)
+			},
+			Expression::System(num) => write!(f, "sys_{:#x}", num),
+			Expression::List(ref vec) => write!(f, "{{{}}}", format_list(vec)),
+			Expression::Error => write!(f, "ERROR"),
+
+			Expression::LocalVarRef(idx) => write!(f, "local_var[{}]", idx),
+			Expression::FunctionRef(idx) => write!(f, "function_{:#x}", idx),
+			Expression::GlobalVarRef(idx) => write!(f, "global_var[{:#x}]", idx),
 		}
 	}
 }
@@ -309,6 +462,13 @@ pub enum BinaryOp {
 
 	And,
 	Or,
+
+	BitwiseAnd,
+	BitwiseOr,
+	BitwiseXor,
+	LeftShift,
+	RightShift,
+	UnsignedRightShift,
 
 	Index,
 	Member,
@@ -333,6 +493,12 @@ impl std::fmt::Display for BinaryOp {
 			BinaryOp::Or => write!(f, " || "),
 			BinaryOp::Index => write!(f, "[]"),
 			BinaryOp::Member => write!(f, "."),
+			BinaryOp::BitwiseAnd => write!(f, " & "),
+			BinaryOp::BitwiseOr => write!(f, " | "),
+			BinaryOp::BitwiseXor => write!(f, " ^ "),
+			BinaryOp::LeftShift => write!(f, " << "),
+			BinaryOp::RightShift => write!(f, " >> "),
+			BinaryOp::UnsignedRightShift => write!(f, " >>> "),
 		}
 	}
 }
@@ -355,22 +521,6 @@ impl std::fmt::Display for UnaryOp {
 		}
 	}
 }
-
-fn format_list<T: std::fmt::Display>(list: &[T]) -> String {
-	let mut it = list.iter();
-	if let Some(elem) = it.next() {
-		let mut comma_separated = elem.to_string();
-
-		for elem in it {
-			comma_separated.push_str(", ");
-			comma_separated.push_str(&elem.to_string());
-		}
-		comma_separated
-	} else {
-		String::new()
-	}
-}
-
 
 impl std::fmt::Display for FunctionType {
 	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {

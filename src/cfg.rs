@@ -18,16 +18,21 @@ use petgraph::Direction;
 use petgraph::graph::{Graph, NodeIndex};
 use petgraph::visit::{IntoNodeReferences, DfsPostOrder, Walker};
 use petgraph::algo::{dominators::{simple_fast as find_dominators}, is_isomorphic};
-use petgraph::dot::Dot;
-
+use petgraph::dot::{Dot, Config as DotCfg};
 
 use ::Result;
 use ::Expression;
 
+use ::Variable;
+use ::Function;
+use ::format_list;
+
 // Note: petgraph NodeIndices must not be used after a node is removed
 pub struct ControlFlowGraph {
-	graph: Graph<Block, Option<bool>>,
+	graph: Graph<Block, GraphEdge>,
 	entry: NodeIndex,
+	is_function: bool,
+
 	if_follow: HashMap<NodeIndex, NodeIndex>,
 	loop_head: HashMap<NodeIndex, NodeIndex>,
 	loop_latch: HashMap<NodeIndex, NodeIndex>,
@@ -37,13 +42,44 @@ pub struct ControlFlowGraph {
 	post_order: Vec<NodeIndex>
 }
 
+#[derive(Debug, Copy, Clone, PartialEq)]
+enum GraphEdge {
+	Entry(usize),
+	TwoWay(bool),
+	OneWay,
+}
+
 impl ControlFlowGraph {
-	pub fn new(address: usize) -> Self {
+	pub fn main(entrypoints: &[(usize, usize)]) -> Self {
+		let mut graph = Graph::new();
+		let head = graph.add_node(Block::new(std::usize::MAX));	// TODO: temp, remove
+		for &(z_level, entry_address) in entrypoints {
+			let succ = graph.add_node(Block::new(entry_address));
+			graph.update_edge(head, succ, GraphEdge::Entry(z_level));
+		}
+		ControlFlowGraph {
+			graph,
+			entry: head,
+			is_function: false,
+
+			if_follow: HashMap::new(),
+			loop_head: HashMap::new(),
+			loop_latch: HashMap::new(),
+
+			loops: Vec::new(),
+
+			post_order: Vec::new(),
+		}
+		
+	}
+	pub fn function(address: usize) -> Self {
 		let mut graph = Graph::new();
 		let head = graph.add_node(Block::new(address));
 		ControlFlowGraph {
 			graph,
 			entry: head,
+			is_function: true,
+
 			if_follow: HashMap::new(),
 			loop_head: HashMap::new(),
 			loop_latch: HashMap::new(),
@@ -79,14 +115,30 @@ impl ControlFlowGraph {
 	}
 
 	pub fn add_successor(&mut self, pred: NodeIndex, succ: NodeIndex) {
-		self.graph.update_edge(pred, succ, None);
+		self.graph.update_edge(pred, succ, GraphEdge::OneWay);
 	}
 
 	pub fn add_branch(&mut self, block_id: NodeIndex, condition: Expression, then_block: NodeIndex, else_block: NodeIndex) {
 		self.graph[block_id].condition = Some(condition);
 
-		self.graph.update_edge(block_id, then_block, Some(true));
-		self.graph.update_edge(block_id, else_block, Some(false));
+		self.graph.update_edge(block_id, then_block, GraphEdge::TwoWay(true));
+		self.graph.update_edge(block_id, else_block, GraphEdge::TwoWay(false));
+	}
+
+	fn get_then_else(&self, block_id: NodeIndex) -> Result<(NodeIndex, NodeIndex)> {
+		let mut succ = self.graph.neighbors(block_id).detach();
+
+		// Edge to true block is labelled with Some(true)
+		let (edge_index, node_index) = succ.next(&self.graph).ok_or("")?;
+		let edge_weight = self.graph.edge_weight(edge_index).ok_or("")?;
+		if edge_weight == &GraphEdge::TwoWay(true) {
+			// node_index is the true block, and the next one is false block
+			Ok((node_index, succ.next(&self.graph).ok_or("")?.1))
+		} else if edge_weight == &GraphEdge::TwoWay(false) {
+			Ok((succ.next(&self.graph).ok_or("")?.1, node_index))
+		} else {
+			Err("Not a valid 2-way".into())
+		}
 	}
 }
 
@@ -131,6 +183,7 @@ impl ControlFlowGraph {
 				}
 			}
 		}
+		info!("Found {} loops", self.loops.len());
 	}
 
 	// Determine follow nodes for 2-way conditional nodes
@@ -154,7 +207,8 @@ impl ControlFlowGraph {
 		// (i.e. they are nested conditionals or unstructured conditionals that reach this node).
 		for node in self.post_order() {
 			// Check if it is a 2-way that is not a head or latching node
-			if self.graph.edges(node).count() == 2 && !self.is_head_latch(node) {
+			// ALSO structure n-ways at the same time
+			if self.graph.edges(node).count() >= 2 && !self.is_head_latch(node) {
 				// Find the maximum node (in RPO) such that it
 				//	* has more than two predecessors
 				//	* is immediately dominated by `node`
@@ -228,9 +282,6 @@ impl ControlFlowGraph {
 			}
 		}
 
-		trace!("Found loop - Head: {}, Latch: {}, Nodes: {:?}", 
-			head.index(), latch.index(), set2vec(&nodes_in_loop));
-
 		// Find loop type
 		let loop_type = {
 			let num_succ_latch = self.graph.neighbors(latch).count();
@@ -286,14 +337,17 @@ impl ControlFlowGraph {
 		let condition = {
 			match loop_type {
 				LoopType::PreTested => {
-					self.graph[head].condition.clone().unwrap()
+					self.graph[head].condition.clone().unwrap_or(Expression::Error)
 				}, 
 				LoopType::PostTested => {
-					self.graph[latch].condition.clone().unwrap()
+					self.graph[latch].condition.clone().unwrap_or(Expression::Error)
 				},
 				_ => panic!()
 			}
 		};
+
+		trace!("Found {:?} - Head: {}, Latch: {}, Nodes: {:?}", 
+			loop_type, head.index(), latch.index(), set2vec(&nodes_in_loop));
 
 		self.loops.push(Loop {
 			head,
@@ -313,6 +367,27 @@ impl ControlFlowGraph {
 		}
 
 		self.post_order.clone()
+	}
+}
+
+impl ControlFlowGraph {
+	pub fn write_graph<F: Write>(&self, out: &mut F) -> Result<()> {
+		let dot = Dot::with_config(&self.graph, &[DotCfg::NodeIndexLabel, DotCfg::EdgeNoLabel]);
+		write!(out, "{:?}", dot)?;
+		Ok(())
+	}
+}
+
+// Replace ref
+impl ControlFlowGraph {
+	pub fn replace_ref(&mut self, global_vars: &[Variable], functions: &[Function], local_vars: &[Variable]) {
+		trace!("Replacing references..");
+		for block in self.graph.node_weights_mut() {
+			for inst in block.instructions.iter_mut() {
+				inst.replace_ref(global_vars, functions, local_vars);
+			}
+			block.condition.as_mut().map(|expr| expr.replace_ref(global_vars, functions, local_vars));
+		}
 	}
 }
 
@@ -341,6 +416,35 @@ impl StatementConstructor {
 
 		let mut line_num = None;
 
+		// Construct entry differently
+		if !cfg.is_function && entry == cfg.entry {
+			let follow = cfg.if_follow.get(&entry).cloned();
+
+			let mut entry_statement = EntryStatement::new();
+
+			if let Some(follow) = follow {
+				self.if_follow.push(follow);
+			}
+			let mut succ = cfg.graph.neighbors(entry).detach();
+			while let Some((edge_index, node_index)) = succ.next(&cfg.graph) {
+				let edge = cfg.graph[edge_index];
+				if let GraphEdge::Entry(z_level) = edge {
+					let block = self.construct_statements(cfg, node_index);
+					entry_statement.add_entry(z_level, block);
+				} else {
+					error!("Entry has edge {:?}", edge);
+				}
+			}
+			self.if_follow.pop();
+
+			result.push(Statement {
+				s_type: StatementType::Entry(entry_statement),
+				line_num: None
+			});
+
+			block_id = follow;
+		}
+
 		while let Some(index) = block_id {
 			let block = &cfg.graph[index];
 
@@ -356,9 +460,62 @@ impl StatementConstructor {
 			result.push(Statement::label(index));
 			self.block_done.insert(index);
 
+			// Handle header nodes of loops separately
 			if let Some(ref loop_ref) = cfg.loops.iter().find(|&ref loop_ref| loop_ref.head == index) {
+				if loop_ref.head == loop_ref.latch {
+					panic!("TODO: Loops where the header is the latch node.");
+				}
 				let loop_statement = match loop_ref.loop_type {
-					LoopType::PreTested => panic!("Pre test loop not handled yet!"),	//TODO: handle
+					// Pre-tested:
+					// A<--.
+					// |\  |
+					// | \ |
+					// |  \|
+					// C   B
+					// Before: A
+					// Condition: A if else block is C, else negate(A)
+					// Body: B + A
+					LoopType::PreTested => {
+						let mut loop_before = Vec::new();
+						for inst in block.instructions.iter() {
+							if let &Instruction::Line(line) = inst {
+								line_num = Some(line as usize);
+							} else {
+								loop_before.push(Statement::new(inst.clone(), line_num.take()));
+							}
+						}
+						result.extend(loop_before.clone());
+						
+						let (then_index, else_index) = cfg.get_then_else(loop_ref.head).unwrap();
+						let (succ, condition) = if loop_ref.loop_follow == else_index {
+							(then_index, loop_ref.condition.clone())
+						} else {
+							(else_index, loop_ref.condition.clone().negate())
+						};
+
+						self.latch_node.push(loop_ref.latch);
+						let mut loop_contents = self.construct_statements(cfg, succ);
+						self.latch_node.pop();
+
+
+						loop_contents.extend(loop_before);
+						Statement {
+							s_type: StatementType::Loop(LoopStatement::While {
+								condition,
+								body: loop_contents
+							}),
+							line_num: None
+						}
+					},
+					// Post-tested:
+					// A<--.
+					//  \  |
+					//   \ |
+					//    \|
+					//     B ---> C
+					// Before: Nothing
+					// Condition: B if else block is C, else negate(B)
+					// Body: A + B
 					LoopType::PostTested => {
 						let mut loop_contents = Vec::new();
 						for inst in block.instructions.iter() {
@@ -369,9 +526,6 @@ impl StatementConstructor {
 							}
 						}
 
-						if loop_ref.head == loop_ref.latch {
-							panic!("TODO: Loops where the header is the latch node.");
-						}
 						self.latch_node.push(loop_ref.latch);
 						let succ = cfg.graph.neighbors(index).next().unwrap();
 						loop_contents.extend(self.construct_statements(cfg, succ));
@@ -380,15 +534,7 @@ impl StatementConstructor {
 
 						// Negate the condition if the loop breaks when it is true
 						//	i.e. the `then` block is outside the loop
-						let else_index = {
-							let mut succ = cfg.graph.neighbors(loop_ref.latch).detach();
-							let (edge_index, node_index) = succ.next(&cfg.graph).unwrap();
-							if cfg.graph.edge_weight(edge_index) == Some(&Some(false)) {
-								node_index
-							} else {
-								succ.next(&cfg.graph).unwrap().1
-							}
-						};
+						let (_, else_index) = cfg.get_then_else(loop_ref.latch).unwrap();
 
 						let condition = if loop_ref.loop_follow == else_index {
 							loop_ref.condition.clone()
@@ -427,28 +573,19 @@ impl StatementConstructor {
 
 				let mut succ = cfg.graph.neighbors(index);
 				match succ.clone().count() {
+					0 | 1 => block_id = succ.next(),
 					2 => {
-						let mut succ = succ.detach();
 						let if_statement = {
-							let (then_index, else_index) = {
-								// Edge to true block is labelled with Some(true)
-								let (edge_index, node_index) = succ.next(&cfg.graph).unwrap();
-								if cfg.graph.edge_weight(edge_index) == Some(&Some(true)) {
-									// node_index is the true block, and the next one is false block
-									(node_index, succ.next(&cfg.graph).unwrap().1)
-								} else {
-									(succ.next(&cfg.graph).unwrap().1, node_index)
-								}
-							};
+							let (then_index, else_index) = cfg.get_then_else(index).unwrap();
 
-							let mut condition = block.condition.clone().unwrap();
-
+							// TODO: clean this
 							// Check if it is of the form
 							// if (cond) {
 							//	 <then node>
 							// }
 							// <follow node>
-							let (then_block, else_block) = {
+							let (then_block, else_block, condition) = {
+								let mut condition = block.condition.clone().unwrap_or(Expression::Error);
 								if let Some(&block_follow) = cfg.if_follow.get(&index) { 
 									let mut empty_then = false;
 
@@ -491,19 +628,15 @@ impl StatementConstructor {
 										else_block = None;
 									};
 
-									(then_block, else_block)
+									(then_block, else_block, condition)
 								} else { // No follow, emit if..then..else
 									let then_block = self.construct_statements(cfg, then_index);
 									let else_block = Some(self.construct_statements(cfg, else_index));
-									(then_block, else_block)
+									(then_block, else_block, condition)
 								}
 							};
 
-							IfStatement {
-								condition,
-								then_block,
-								else_block,
-							}
+							IfStatement::new(condition, then_block, else_block)
 						};
 
 						let if_statement = Statement {
@@ -513,8 +646,7 @@ impl StatementConstructor {
 						result.push(if_statement);
 						block_id = cfg.if_follow.get(&index).cloned();
 					},
-					0 | 1 => block_id = succ.next(),
-					_ => panic!()
+					_ => panic!("No non-entry switches!")
 				}
 			}
 
@@ -684,7 +816,7 @@ struct Loop {
 	condition: Expression,
 }
 
-#[derive(PartialEq)]
+#[derive(Debug, PartialEq)]
 enum LoopType {
 	PreTested,
 	PostTested,
@@ -736,6 +868,24 @@ pub enum Instruction {
 	Expression(Expression)
 }
 
+impl Instruction {
+	fn replace_ref(&mut self, global_vars: &[Variable], functions: &[Function], local_vars: &[Variable]) {
+		match *self {
+			Instruction::Binding { ref mut lhs, ref mut rhs } => {
+				lhs.replace_ref(global_vars, functions, local_vars);
+				rhs.replace_ref(global_vars, functions, local_vars);
+			},
+			Instruction::AddText(ref mut expr, _) => expr.replace_ref(global_vars, functions, local_vars),
+			Instruction::SetName(ref mut expr) => expr.replace_ref(global_vars, functions, local_vars),
+			Instruction::Return(ref mut vec) => for expr in vec.iter_mut() {
+				expr.replace_ref(global_vars, functions, local_vars);
+			},
+			Instruction::Expression(ref mut expr) => expr.replace_ref(global_vars, functions, local_vars),
+			Instruction::Line(_) => (),
+		}
+	}
+}
+
 impl std::fmt::Display for Instruction {
 	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
 		match *self {
@@ -743,315 +893,44 @@ impl std::fmt::Display for Instruction {
 			Instruction::Binding { ref lhs, ref rhs } => write!(f, "{} = {}", lhs, rhs),
 			Instruction::AddText(ref text, id) => write!(f, "addtext {}, {}", text, id),
 			Instruction::SetName(ref name) => write!(f, "setname {}", name),
-			Instruction::Return(ref args) => write!(f, "return {:?}", args),
-			Instruction::Expression(ref expr) => write!(f, "{}", expr)
-		}
-	}
-}
-
-// TODO: might not need to pass if_follow and latch_node if stored in graph
-// Output graph
-impl ControlFlowGraph {
-	pub fn write_graph<F: Write>(&self, out: &mut F) -> Result<()> {
-		write!(out, "{:?}", Dot::new(&self.graph))?;
-		Ok(())
-	}
-}
-
-
-pub struct CFGWriter<'out, 'graph, F: Write + 'static> {
-	out: &'out mut F,
-	cfg: &'graph ControlFlowGraph,
-
-	// map of line number of block written
-	written: HashMap<NodeIndex, usize>,
-	line_num: usize
-}
-
-impl<'a, 'b, F> CFGWriter<'a, 'b, F> where F: Write {
-	pub fn new(out: &'a mut F, graph: &'b ControlFlowGraph) -> CFGWriter<'a, 'b, F> {
-		CFGWriter {
-			out,
-			cfg: graph,
-
-			written: HashMap::new(),
-			line_num: 1
-		}
-	}
-	pub fn write(&mut self) -> Result<()> {
-		let head = self.cfg.entry;
-		self.write_code(head, 0, None, None)?;
-
-		// Check all nodes written
-		let indices: HashSet<NodeIndex> = self.cfg.graph.node_indices().collect();
-		let written: HashSet<NodeIndex> = self.written.keys().cloned().collect();
-		let diff: Vec<usize> = indices.difference(&written).cloned().map(NodeIndex::index).collect();
-		if !diff.is_empty() {
-			warn!("Unwritten blocks: {:?}", diff);
-		}
-		Ok(())
-	}
-
-	// block_id: index of basic block - initially the entry point
-	// indent: level of indentation
-	// latch_node: index of latching node of enclosing loop
-	// if_follow: index of follow node of enclosing if-else
-	fn write_code(&mut self, block_id: NodeIndex, 
-		indent: usize, 
-		latch_node: Option<NodeIndex>,
-		if_follow: Option<NodeIndex>,
-	) -> Result<()> {
-
-		if Some(block_id) == if_follow {
-			return Ok(());
-		} else if Some(block_id) == latch_node {
-			self.write_block(block_id, indent)?;
-			return Ok(());
-		}
-		if self.written.contains_key(&&block_id) {
-			warn!("Block #{} already written!", block_id.index());
-		}
-
-		self.written.insert(block_id, self.line_num);
-
-
-		if self.cfg.loop_head.get(&block_id) == Some(&block_id) {
-			self.write_loop(block_id, indent, latch_node, if_follow)?;
-		} else {
-			match self.cfg.graph.edges(block_id).count() {
-				2 => self.write_2way(block_id, indent, latch_node, if_follow)?,
-				0 | 1 => self.write_1way(block_id, indent, latch_node, if_follow)?,
-				_ => panic!()
-			}
-		}
-		Ok(())
-	}
-
-	fn write_2way(&mut self, block_id: NodeIndex, 
-		indent: usize, 
-		latch_node: Option<NodeIndex>,
-		if_follow: Option<NodeIndex>,
-	) -> Result<()> {
-		self.write_block(block_id, indent)?;
-
-		let (then_block, else_block) = {
-			// Edge to true block is labelled with Some(true)
-			let mut succ = self.cfg.graph.neighbors(block_id).detach();
-			let (edge_index, node_index) = succ.next(&self.cfg.graph).unwrap();
-			if self.cfg.graph.edge_weight(edge_index) == Some(&Some(true)) {
-				// node_index is the true block, and the next one is false block
-				(node_index, succ.next(&self.cfg.graph).unwrap().1)
-			} else {
-				(succ.next(&self.cfg.graph).unwrap().1, node_index)
-			}
-		};
-
-		let condition = self.cfg.graph[block_id].condition.as_ref().unwrap();
-
-		// Check if it is of the form
-		// if (cond) {
-		//	 <then node>
-		// }
-		// <follow node>
-		if let Some(&block_follow) = self.cfg.if_follow.get(&block_id) { 
-			let mut empty_then = false;
-
-			if let Some(line_num) = self.written.get(&then_block).cloned() {
-				write!(self.out, "{}if ({}) {{ \n", "\t".repeat(indent), condition)?;
-				// TODO: goto
-				write!(self.out, "{}goto line {} (#{})\n", "\t".repeat(indent), line_num, then_block.index())?;
-					self.line_num += 2;
-			} else {
-				if then_block != block_follow {
-					write!(self.out, "{}if ({}) {{ \n", "\t".repeat(indent), condition)?;
-						self.line_num += 1;
-					self.write_code(then_block, indent + 1, latch_node, Some(block_follow))?;
-				} else { // empty then clause - negate else clause
-					// TODO: proper negate
-					write!(self.out, "{}if !({}) {{ \n", "\t".repeat(indent), condition)?;
-						self.line_num += 1;
-					self.write_code(else_block, indent + 1, latch_node, Some(block_follow))?;
-					empty_then = true;
-				}
-			}
-
-			if let Some(line_num) = self.written.get(&else_block).cloned() {
-				if !empty_then {
-					write!(self.out, "{}}} else {{ \n", "\t".repeat(indent))?;
-					write!(self.out, "{}goto line {} (#{})\n", "\t".repeat(indent + 1), line_num, else_block.index())?;
-						self.line_num += 2;
-				}
-			} else if else_block != block_follow {
-				write!(self.out, "{}}} else {{ \n", "\t".repeat(indent))?;
-					self.line_num += 1;
-				self.write_code(else_block, indent + 1, latch_node, Some(block_follow))?;
-			}
-			write!(self.out, "{}}} \n", "\t".repeat(indent))?;
-				self.line_num += 1;
-			if !self.written.contains_key(&block_follow) {
-				self.write_code(block_follow, indent, latch_node, if_follow)?;
-			}
-		} else { // No follow, emit if..then..else
-			debug!("No follow on Block {} - follow is {:?}", block_id.index(), if_follow);
-
-			write!(self.out, "{}if ({}) {{ \n", "\t".repeat(indent), condition)?;
-				self.line_num += 1;
-			self.write_code(then_block, indent + 1, latch_node, if_follow)?;
-			write!(self.out, "{}}} else {{ \n", "\t".repeat(indent))?;
-				self.line_num += 1;
-			self.write_code(else_block, indent + 1, latch_node, if_follow)?;
-			write!(self.out, "{}}} \n", "\t".repeat(indent))?;
-				self.line_num += 1;
-		}
-
-		Ok(())
-	}
-
-	fn write_1way(&mut self, block_id: NodeIndex, 
-		indent: usize, 
-		latch_node: Option<NodeIndex>,
-		if_follow: Option<NodeIndex>,
-	) -> Result<()> {
-		self.write_block(block_id, indent)?;
-
-		if let Some(succ) = self.cfg.graph.neighbors(block_id).next() {
-			if let Some(line_num) = self.written.get(&succ).cloned() {
-				// TODO: proper goto labels
-				write!(self.out, "{}goto line {} (#{})\n", "\t".repeat(indent), line_num, succ.index())?;
-					self.line_num += 1;
-			} else {
-				self.write_code(succ, indent, latch_node, if_follow)?;
-			}
-		}
-		Ok(())
-	}
-
-	fn write_loop(&mut self, block_id: NodeIndex,
-		indent: usize,
-		latch_node: Option<NodeIndex>,
-		if_follow: Option<NodeIndex>
-	) -> Result<()> {
-		let loop_ref: &Loop = self.cfg.loops.iter().find(|&ref loop_ref| loop_ref.head == block_id).unwrap();
-
-		// Write loop header
-		match loop_ref.loop_type {
-			LoopType::PreTested => {
-				self.write_block(block_id, indent)?;
-
-				let else_block = {
-					let mut succ = self.cfg.graph.neighbors(block_id).detach();
-					let (edge_index, node_index) = succ.next(&self.cfg.graph).unwrap();
-					if self.cfg.graph.edge_weight(edge_index) == Some(&Some(false)) {
-						node_index
-					} else {
-						succ.next(&self.cfg.graph).unwrap().1
-					}
-				};
-
-				if loop_ref.loop_follow == else_block {
-					write!(self.out, "{}while ({})\n", "\t".repeat(indent), loop_ref.condition)?;
+			Instruction::Return(ref args) =>
+				if args.is_empty() {
+					write!(f, "return")
 				} else {
-					write!(self.out, "{}while !({})\n", "\t".repeat(indent), loop_ref.condition)?;
-				}
-
-				self.line_num += 1;
-			},
-			LoopType::PostTested => {
-				write!(self.out, "{}do {{ \n", "\t".repeat(indent))?;
-					self.line_num += 1;
-				self.write_block(block_id, indent + 1)?;
-			},
-			LoopType::Endless => {
-				write!(self.out, "{}for(;;) {{ \n", "\t".repeat(indent))?;
-					self.line_num += 1;
-				self.write_block(block_id, indent + 1)?;
-			}
-		}
-		// Loop is several basic blocks
-		if loop_ref.head != loop_ref.latch {
-			if loop_ref.loop_type != LoopType::PreTested {
-				for succ in self.cfg.graph.neighbors(block_id) {
-					if succ != loop_ref.loop_follow {
-						if let Some(line_num) = self.written.get(&succ).cloned() {
-							write!(self.out, "{}goto line {} (#{})\n", "\t".repeat(indent + 1), line_num, succ.index())?;
-								self.line_num += 1;
-						} else {
-							self.write_code(succ, indent + 1, Some(loop_ref.latch), if_follow)?;
-						}
-					}
-				}
-			}
-		}
-		// Write loop trailer
-		match loop_ref.loop_type {
-			LoopType::PreTested => {
-				self.write_block(block_id, indent + 1)?;
-				write!(self.out, "{}}}\n", "\t".repeat(indent))?;
-					self.line_num += 1;
-			},
-			LoopType::PostTested => {
-				let else_block = {
-					let mut succ = self.cfg.graph.neighbors(loop_ref.latch).detach();
-					let (edge_index, node_index) = succ.next(&self.cfg.graph).unwrap();
-					if self.cfg.graph.edge_weight(edge_index) == Some(&Some(false)) {
-						node_index
-					} else {
-						succ.next(&self.cfg.graph).unwrap().1
-					}
-				};
-
-				if loop_ref.loop_follow == else_block {
-					write!(self.out, "{}while ({});\n", "\t".repeat(indent), loop_ref.condition)?;
+					write!(f, "return({})", format_list(args))
+				},
+			Instruction::Expression(ref expr) => {
+				// If the expression is a variable, treat it as a declaration
+				if let Expression::Variable { ref name, ref var_type } = expr {
+					write!(f, "{} {}", var_type, name)
 				} else {
-					write!(self.out, "{}while !({});\n", "\t".repeat(indent), loop_ref.condition)?;
+					write!(f, "{}", expr)
 				}
-				self.line_num += 1;
-			},
-			LoopType::Endless => {
-				write!(self.out, "{}}} \n", "\t".repeat(indent))?;
-					self.line_num += 1;
 			}
 		}
-		// Continue with follow
-		if let Some(line_num) = self.written.get(&loop_ref.loop_follow).cloned() {
-			write!(self.out, "{}goto line {} (#{})\n", "\t".repeat(indent), line_num, loop_ref.loop_follow.index())?;
-				self.line_num += 1;
-		} else {
-			self.write_code(loop_ref.loop_follow, indent, latch_node, if_follow)?;
-		}
-
-		Ok(())
-	}
-
-
-	fn write_block(&mut self, block_id: NodeIndex, 
-		indent: usize
-	) -> Result<()> {
-		let block = &self.cfg.graph[block_id];
-		for inst in block.instructions.iter() {
-			write!(self.out, "{}{}\n", "\t".repeat(indent), inst)?;
-		}
-		self.line_num += block.instructions.len();
-		Ok(())
 	}
 }
 
 //======================================================================
 
 // These aren't really statements, I picked a bad name
+#[derive(Clone)]
 pub struct Statement {
 	s_type: StatementType,
 	line_num: Option<usize>,
 }
 
+#[derive(Clone)]
 enum StatementType {
 	Inst(Instruction),
 	If(IfStatement),
 	Loop(LoopStatement),
 	Goto(NodeIndex),
 	Label(NodeIndex),
+	Entry(EntryStatement)
 }
 
+#[derive(Clone)]
 struct IfStatement {
 	condition: Expression,
 	then_block: Vec<Statement>,
@@ -1059,6 +938,23 @@ struct IfStatement {
 }
 
 impl IfStatement {
+	fn new(condition: Expression, then_block: Vec<Statement>, else_block: Option<Vec<Statement>>) -> Self {
+		if let Some(ref v) = else_block {
+			if v.is_empty() {
+				return IfStatement {
+					condition,
+					then_block,
+					else_block: None
+				}
+			}
+		}
+
+		IfStatement {
+			condition,
+			then_block,
+			else_block
+		}
+	}
 	fn apply_func_to_blocks<F>(&mut self, mut func: F)
 	where 
 		F: FnMut(&mut Vec<Statement>) -> (),
@@ -1070,7 +966,12 @@ impl IfStatement {
 	}
 }
 
+#[derive(Clone)]
 enum LoopStatement {
+	While {
+		condition: Expression,
+		body: Vec<Statement>
+	},
 	DoWhile {
 		condition: Expression,
 		body: Vec<Statement>
@@ -1088,6 +989,13 @@ enum LoopStatement {
 impl LoopStatement {
 	fn write<F: Write>(&self, out: &mut F, indent: usize, comment: String) -> Result<()> {
 		match *self {
+			LoopStatement::While { ref condition, ref body } => {
+				write!(out, "{}while ({}) {{ {}\n", "\t".repeat(indent), condition, comment)?;
+				for s in body.iter() {
+					s.write(out, indent + 1)?;
+				}
+				write!(out, "{}}} \n", "\t".repeat(indent))?;
+			},
 			LoopStatement::DoWhile { ref condition, ref body } => {
 				write!(out, "{}do {{ {}\n", "\t".repeat(indent), comment)?;
 				for s in body.iter() {
@@ -1114,9 +1022,36 @@ impl LoopStatement {
 		F: FnMut(&mut Vec<Statement>) -> (),
 	{
 		match self {
+			LoopStatement::While { ref mut body, .. } => func(body),
 			LoopStatement::DoWhile { ref mut body, .. } => func(body),
 			LoopStatement::For { ref mut body, .. } => func(body),
 
+		}
+	}
+}
+
+#[derive(Clone)]
+struct EntryStatement {
+	entries: Vec<(usize, Vec<Statement>)>
+}
+
+impl EntryStatement {
+	fn new() -> Self {
+		EntryStatement {
+			entries: Vec::new()
+		}
+	}
+
+	fn add_entry(&mut self, z_level: usize, block: Vec<Statement>) {
+		self.entries.push((z_level, block));
+	}
+
+	fn apply_func_to_blocks<F>(&mut self, mut func: F)
+	where 
+		F: FnMut(&mut Vec<Statement>) -> (),
+	{
+		for &mut (_, ref mut block) in self.entries.iter_mut() {
+			func(block);
 		}
 	}
 }
@@ -1167,6 +1102,16 @@ impl Statement {
 				}
 				write!(out, "{}}}\n", "\t".repeat(indent))?;
 			},
+			StatementType::Entry(ref statement) => {
+				write!(out, "{}Entry {{ \n", "\t".repeat(indent))?;
+				for &(z_level, ref block) in statement.entries.iter().rev() {
+					write!(out, "{}z {}: \n", "\t".repeat(indent), z_level)?;
+					for s in block.iter() {
+						s.write(out, indent + 1)?;
+					}
+				}
+				write!(out, "{}}} \n", "\t".repeat(indent))?;
+			},
 			StatementType::Loop(ref statement) => statement.write(out, indent, comment)?,
 			StatementType::Goto(block) => write!(out, "{}goto label_{} \n", "\t".repeat(indent), block.index())?,
 			StatementType::Label(block) => write!(out, "{}label_{}: \n", "\t".repeat(indent), block.index())?,
@@ -1181,6 +1126,8 @@ fn simplify_statements(block: &mut Vec<Statement>, ctor: &StatementConstructor) 
 	remove_labels(block, &ctor.gotos);
 
 	construct_for_loops(block);
+
+	//fold_ifs(block);
 }
 
 fn remove_labels(statements: &mut Vec<Statement>, gotos: &HashSet<NodeIndex>) {
@@ -1193,6 +1140,7 @@ fn remove_labels(statements: &mut Vec<Statement>, gotos: &HashSet<NodeIndex>) {
 				StatementType::Label(ref label) => !gotos.contains(label),
 				StatementType::If(ref mut statement) => {statement.apply_func_to_blocks(|block| remove_labels(block, gotos)); false},
 				StatementType::Loop(ref mut statement) => {statement.apply_func_to_blocks(|block| remove_labels(block, gotos)); false},
+				StatementType::Entry(ref mut statement) => {statement.apply_func_to_blocks(|block| remove_labels(block, gotos)); false},
 				StatementType::Inst(_) => false,
 				StatementType::Goto(_) => false,
 			}
@@ -1255,6 +1203,18 @@ fn construct_for_loops(block: &mut Vec<Statement>) {
 		None
 	}
 }
+
+// fn fold_ifs(block: &mut Vec<Statement>) {
+// 	for s in block.iter_mut() {
+// 		match s.s_type {
+// 			StatementType::If(ref mut statement) => {
+
+// 			},
+// 			StatementType::Loop(ref mut statement) => statement.apply_func_to_blocks(fold_ifs),
+// 			_ => {},
+// 		};
+// 	}
+// }
 
 // Util
 fn set2vec(set: &HashSet<NodeIndex>) -> Vec<usize> {

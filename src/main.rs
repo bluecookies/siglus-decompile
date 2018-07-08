@@ -39,6 +39,9 @@ use decrypt::read_scene_pack_header;
 use stack::ProgStack;
 
 
+mod kinetic_lib;
+use kinetic_lib::KineticType;
+
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum VariableType {
 	Void,	//0x00
@@ -53,6 +56,8 @@ pub enum VariableType {
 	StageElem,
 	Error,
 	Unknown,
+
+	Kinetic(KineticType)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -152,6 +157,8 @@ impl std::fmt::Display for VariableType {
 			VariableType::StageElem => write!(f, "stage_elem"),
 			VariableType::Error => write!(f, "ERROR"),
 			VariableType::Unknown => write!(f, "???"),
+
+			VariableType::Kinetic(kin) => write!(f, "{}", kin)
 		}
 	}
 }

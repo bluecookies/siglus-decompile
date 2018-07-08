@@ -150,7 +150,12 @@ impl ProgStack {
 				} else {
 					self.handle_frame().unwrap()
 				}
-			}
+			},
+
+			VariableType::Kinetic(_) => {
+				warn!("Trying to access kinetic type from stack: {}", var_type);
+				Expression::Error
+			},
 		}
 	}
 }

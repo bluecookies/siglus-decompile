@@ -145,7 +145,7 @@ impl ControlFlowGraph {
 // Structuring
 impl ControlFlowGraph {
 	pub fn structure_statements(&mut self) -> Vec<Statement> {
-		info!("Starting graph structuring...");
+		trace!("Starting graph structuring...");
 
 		self.structure_loops();
 
@@ -164,10 +164,10 @@ impl ControlFlowGraph {
 	// and the type of loop (TODO)
 	// TODO: test this for nested loops
 	fn structure_loops(&mut self) {
-		info!("Structuring loops...");
+		trace!("Structuring loops...");
 		let deriv_seq = derived_sequence(&self.graph, self.entry);
 
-		info!("Finding loops...");
+		trace!("Finding loops...");
 		for (i, (graph, intervals)) in deriv_seq.iter().enumerate() {
 			// For each interval header, check if any of its predecessors
 			// are inside that interval
@@ -183,13 +183,13 @@ impl ControlFlowGraph {
 				}
 			}
 		}
-		info!("Found {} loops", self.loops.len());
+		trace!("Found {} loops", self.loops.len());
 	}
 
 	// Determine follow nodes for 2-way conditional nodes
 	// This step must be done after loops are found or weirdness will ensue
 	fn structure_ifs(&mut self) {
-		info!("Structuring 2-ways...");
+		trace!("Structuring 2-ways...");
 		let dominators = find_dominators(&self.graph, self.entry);
 
 		let mut unresolved: HashSet<NodeIndex> = HashSet::new();
@@ -362,7 +362,7 @@ impl ControlFlowGraph {
 	// TODO: check if needs rebuilding
 	fn post_order(&mut self) -> Vec<NodeIndex> {
 		if self.post_order.is_empty() {
-			info!("Computing post order traversal...");
+			trace!("Computing post order traversal...");
 			self.post_order = DfsPostOrder::new(&self.graph, self.entry).iter(&self.graph).collect();
 		}
 
@@ -709,13 +709,13 @@ fn compute_intervals<N, E>(graph: &Graph<N, E>, entry: NodeIndex) -> Vec<Interva
 }
 
 fn derived_sequence<N, E>(g: &Graph<N, E>, mut entry: NodeIndex) -> Vec<(Graph<NodeIndex, bool>, Vec<Interval>)> {
-	info!("Generating sequence of interval derived graphs...");
+	trace!("Generating sequence of interval derived graphs...");
 
 	let g1 = g.map(
 		|node_index, _block| node_index,
 		|_edge_index, _weight| true
 	);
-	debug!("\tConstructed graph G{}", 1);
+	trace!("\tConstructed graph G{}", 1);
 
 	// TODO: might just not need this by searching for `externals`
 	// Set entry to be the node index that has entry as weight
@@ -766,12 +766,12 @@ fn derived_sequence<N, E>(g: &Graph<N, E>, mut entry: NodeIndex) -> Vec<(Graph<N
 		}
 
 		last_graph = graph;
-		debug!("\tConstructed graph G{}", i);
+		trace!("\tConstructed graph G{}", i);
 		i += 1;
 	}
 
 	let reducible = deriv_seq.last().unwrap().0.node_count() == 1;
-	info!("Generated sequence of {} graphs. The final graph was {}.", deriv_seq.len(), if reducible { "reducible" } else { "irreducible"});
+	trace!("Generated sequence of {} graphs. The final graph was {}.", deriv_seq.len(), if reducible { "reducible" } else { "irreducible"});
 
 	deriv_seq
 }

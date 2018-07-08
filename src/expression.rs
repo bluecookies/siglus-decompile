@@ -111,25 +111,28 @@ impl Expression {
 			Expression::RawString(_) => VariableType::Str,
 			Expression::Variable(Variable { var_type, .. }) => var_type,
 			Expression::UnaryExpr { ref value, .. } => value.get_type(),	// temp
-			Expression::BinaryExpr { ref lhs, op, .. } => {
+			Expression::BinaryExpr { ref lhs, ref rhs, op, .. } => {
 				match op {
+					// TODO: check
 					BinaryOp::Index => match lhs.get_type() {
 						VariableType::IntList(_) => VariableType::Int,
 						VariableType::StrList(_) => VariableType::Str,
 						VariableType::ObjList(_) => VariableType::Obj,
+						VariableType::Kinetic(kin) => kin.index_type(),
 						_ => {
 							//warn!("Indexing a list: {}", self);
 							VariableType::Unknown
 						}
 					}
 					BinaryOp::Eq | BinaryOp::Neq | BinaryOp::And | BinaryOp::Or => VariableType::Int,
+					BinaryOp::Member => rhs.get_type(),
 					_ => lhs.get_type()
 				}
 			},
 			Expression::Function(_) => panic!(),
 			Expression::FunctionCall { return_type, .. } => return_type,
 			Expression::System(_) => VariableType::Unknown,
-			Expression::List(_) => VariableType::Unknown,
+			Expression::List(_) => VariableType::Unknown,	// TODO: check
 			Expression::Error => VariableType::Error,
 
 			Expression::LocalVarRef(_) |
@@ -317,6 +320,8 @@ impl Expression {
 				}
 			},
 		}
+
+		::kinetic_lib::replace(self);
 	}
 }
 

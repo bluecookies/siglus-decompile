@@ -901,7 +901,7 @@ impl std::fmt::Display for Instruction {
 				},
 			Instruction::Expression(ref expr) => {
 				// If the expression is a variable, treat it as a declaration
-				if let Expression::Variable { ref name, ref var_type } = expr {
+				if let Expression::Variable(Variable { ref name, ref var_type }) = expr {
 					write!(f, "{} {}", var_type, name)
 				} else {
 					write!(f, "{}", expr)

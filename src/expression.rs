@@ -11,7 +11,7 @@ use ::format_list;
 pub enum Expression {
 	RawInt(i32),
 	RawString(String),
-	Variable { name: String, var_type: VariableType },
+	Variable(Variable),
 
 	UnaryExpr {
 		value: Box<Expression>,
@@ -49,7 +49,24 @@ pub enum FunctionType {
 	Named(String),
 }
 
+// Constructors
 impl Expression {
+	pub fn index(lhs: Expression, rhs: Expression) -> Expression {
+		Expression::BinaryExpr {
+			lhs: Box::new(lhs), 
+			rhs: Box::new(rhs),
+			op: BinaryOp::Index
+		}
+	}
+
+	pub fn member(lhs: Expression, rhs: Expression) -> Expression {
+		Expression::BinaryExpr {
+			lhs: Box::new(lhs), 
+			rhs: Box::new(rhs),
+			op: BinaryOp::Member
+		}
+	}
+
 	pub fn procedure_call(label: usize, args: Vec<Expression>) -> Expression {
 		let function = FunctionType::Procedure(label);
 		Expression::FunctionCall {
@@ -92,7 +109,7 @@ impl Expression {
 		match *self {
 			Expression::RawInt(_) => VariableType::Int,
 			Expression::RawString(_) => VariableType::Str,
-			Expression::Variable { var_type, .. } => var_type,
+			Expression::Variable(Variable { var_type, .. }) => var_type,
 			Expression::UnaryExpr { ref value, .. } => value.get_type(),	// temp
 			Expression::BinaryExpr { ref lhs, op, .. } => {
 				match op {
@@ -280,7 +297,7 @@ impl Expression {
 
 			Expression::LocalVarRef(index) => {
 				if index < local_vars.len() {
-					*self = local_vars[index].to_expression();
+					*self = local_vars[index].clone().to_expression();
 				} else {
 					warn!("Local var reference {} out of range.", index);
 				}
@@ -294,7 +311,7 @@ impl Expression {
 			},
 			Expression::GlobalVarRef(index) => {
 				if index < global_vars.len() {
-					*self = global_vars[index].to_expression();
+					*self = global_vars[index].clone().to_expression();
 				} else {
 					warn!("Global var reference {} out of range.", index);
 				}
@@ -323,7 +340,7 @@ impl std::fmt::Display for Expression {
 		match *self {
 			Expression::RawInt(num) => write!(f, "{}", num),
 			Expression::RawString(ref string) => write!(f, "\"{}\"", string),
-			Expression::Variable{ref name, .. } => write!(f, "{}", name),
+			Expression::Variable(Variable {ref name, .. }) => write!(f, "{}", name),
 			Expression::UnaryExpr{ref value, op} => {
 				if self.precedence() > value.precedence() {
 					write!(f, "{}({})", op, value)
@@ -389,7 +406,7 @@ impl std::fmt::LowerHex for Expression {
 		match *self {
 			Expression::RawInt(num) => write!(f, "{:#x}", num),
 			Expression::RawString(ref string) => write!(f, "\"{}\"", string),
-			Expression::Variable{ref name, .. } => write!(f, "{}", name),
+			Expression::Variable(Variable {ref name, .. }) => write!(f, "{}", name),
 			Expression::UnaryExpr{ref value, op} => {
 				if self.precedence() > value.precedence() {
 					write!(f, "{}({:#x})", op, value.as_ref())

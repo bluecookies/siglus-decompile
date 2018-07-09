@@ -274,7 +274,7 @@ fn main() {
 	let scene_pack_header = read_scene_pack_header(&mut scene_pack).expect("Error reading scene pack header.");
 
 	if decrypt_key.is_some() != scene_pack_header.extra_key_use {
-		warn!("Warning: key (not) expected");
+		warn!("Key (not) expected");
 	}
 
 	// Read global variables
@@ -707,7 +707,10 @@ impl Script {
 						let name = stack.pop(VariableType::Str);
 						graph.add_inst(block_id, Instruction::SetName(name));
 					},
-					_ => panic!("Unexpected opcode at address {:#x}: {:#02x}", address, opcode)
+					_ => {
+						warn!("Unexpected opcode at address {:#x}: {:#02x}", address, opcode);
+						graph.add_inst(block_id, Instruction::Nop(opcode));
+					}
 				}
 
 				let new_address = bytecode.position() as usize;

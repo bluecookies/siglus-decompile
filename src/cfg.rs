@@ -865,7 +865,8 @@ pub enum Instruction {
 	AddText(Expression, u32),
 	SetName(Expression),
 	Return(Vec<Expression>),
-	Expression(Expression)
+	Expression(Expression),
+	Nop(u8)
 }
 
 impl Instruction {
@@ -882,6 +883,7 @@ impl Instruction {
 			},
 			Instruction::Expression(ref mut expr) => expr.replace_ref(global_vars, functions, local_vars),
 			Instruction::Line(_) => (),
+			Instruction::Nop(_) => (),
 		}
 	}
 }
@@ -907,6 +909,7 @@ impl std::fmt::Display for Instruction {
 					write!(f, "{}", expr)
 				}
 			}
+			Instruction::Nop(op) => write!(f, "nop {:#2x}", op)
 		}
 	}
 }

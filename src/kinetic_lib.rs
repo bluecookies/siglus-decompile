@@ -35,6 +35,7 @@ pub enum KineticType {
 
 	Math,
 	Touch,
+	TimeRate,
 	System,
 
 	IntPointer,	// Int Event Pointer
@@ -55,10 +56,6 @@ pub enum KineticType {
 }
 
 impl KineticType {
-	fn to_var_type(self) -> VariableType {
-		VariableType::Kinetic(self)
-	}
-
 	pub fn index_type(&self) -> VariableType {
 		match *self {
 			KineticType::SheetList     => KineticType::Sheet.to_var_type(),
@@ -82,6 +79,23 @@ impl KineticType {
 	}
 }
 
+trait ToVarType {
+	fn to_var_type(self) -> VariableType;
+}
+
+impl ToVarType for KineticType {
+	fn to_var_type(self) -> VariableType {
+		VariableType::Kinetic(self)
+	}
+}
+
+impl ToVarType for VariableType {
+	fn to_var_type(self) -> VariableType {
+		self
+	}
+}
+
+
 
 impl fmt::Display for KineticType {
 	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -104,6 +118,7 @@ impl fmt::Display for KineticType {
 			KineticType::SndPcmEsElem         => write!(f, "k_snd_pcmes_elem"),
 			KineticType::SndPcmChList         => write!(f, "k_snd_pcmch_list"),
 			KineticType::Touch                => write!(f, "k_touch"),
+			KineticType::TimeRate             => write!(f, "k_timerate"),
 			KineticType::Math                 => write!(f, "k_math"),
 			KineticType::System               => write!(f, "k_sys"),
 			KineticType::IntPointer           => write!(f, "k_int_eve_pointer"),
@@ -125,7 +140,7 @@ impl fmt::Display for KineticType {
 
 pub fn replace(expr: &mut Expression) {
 	match *expr {
-		Expression::System(index) => replace_sys(expr, index),
+		Expression::System(index) => replace_global(expr, index),
 		Expression::BinaryExpr { ref mut lhs, ref mut rhs, op } => {
 			if op == BinaryOp::Member {
 				replace_member(lhs, rhs);
@@ -135,14 +150,18 @@ pub fn replace(expr: &mut Expression) {
 	}
 }
 
-fn replace_sys(expr: &mut Expression, index: i32) {
+fn replace_global(expr: &mut Expression, index: i32) {
 	match index {
 		0x01000000 => *expr = var_expr("g_sheets", KineticType::SheetList),
 		0x01000002 => *expr = var_expr("g_touch", KineticType::Touch),
+		0x01000004 => *expr = named_func("jump_scene"),
 		0x01000008 => *expr = var_expr("g_ikmaps", KineticType::IntKeyMapList),
 		0x01000009 => *expr = var_expr("g_skmaps", KineticType::StrKeyMapList),
 		0x0100000a => *expr = named_func("g_savedata_save"),
+		0x01000010 => *expr = var_expr("g_time_rate", KineticType::TimeRate),
 		0x01000019 => *expr = var_expr("g_json_list", KineticType::JsonList),
+		0x03 => *expr = named_func("goto_menu?"),
+		0x1F => *expr = var_expr("g_int_list", VariableType::IntList(0)),
 		0x27 => *expr = var_expr("g_math", KineticType::Math),
 		0x28 => *expr = var_expr("g_counters", KineticType::CounterList),
 		0x2A => *expr = var_expr("g_sndbgm_element", KineticType::SndBgmElem),
@@ -162,24 +181,25 @@ fn replace_member(lhs: &mut Expression, rhs: &mut Expression) {
 		match var_type {
 			VariableType::Kinetic(kin_type) => {
 				match kin_type {
-					KineticType::Sheet => replace_sheet(rhs, index),
-					KineticType::Table => replace_table(rhs, index),
-					KineticType::Group => replace_group(rhs, index),
-					KineticType::Cell => replace_cell(rhs, index),
-					KineticType::Ui => replace_ui(rhs, index),
-					KineticType::Unit => replace_unit(rhs, index),
-					KineticType::Counter => replace_counter(rhs, index),
-					KineticType::SndBgmElem => replace_bgm_elem(rhs, index),
-					KineticType::SndPcmEsElem => replace_pcmes_elem(rhs, index),
-					KineticType::Touch => replace_touch(rhs, index),
-					KineticType::IntPointer => replace_int_event_pointer(rhs, index),
-					KineticType::IntKeyMap => replace_ikmap(rhs, index),
-					KineticType::StrKeyMap => replace_skmap(rhs, index),
-					KineticType::Json => replace_json(rhs, index),
-					KineticType::KeyMapValue => replace_keymapvalue(rhs, index),
-					KineticType::Math => replace_math(rhs, index),
-					KineticType::Firebase => replace_firebase(rhs, index),
-					KineticType::System => replace_system(rhs, index),
+					KineticType::Sheet           => display::replace_sheet(rhs, index),
+					KineticType::Table           => display::replace_table(rhs, index),
+					KineticType::Group           => display::replace_group(rhs, index),
+					KineticType::Cell            => display::replace_cell(rhs, index),
+					KineticType::Ui              => display::replace_ui(rhs, index),
+					KineticType::Unit            => display::replace_unit(rhs, index),
+					KineticType::Counter         => replace_counter(rhs, index),
+					KineticType::SndBgmElem      => replace_bgm_elem(rhs, index),
+					KineticType::SndPcmEsElem    => replace_pcmes_elem(rhs, index),
+					KineticType::Touch           => replace_touch(rhs, index),
+					KineticType::TimeRate        => replace_timerate(rhs, index),
+					KineticType::IntPointer      => replace_int_event_pointer(rhs, index),
+					KineticType::IntKeyMap       => replace_ikmap(rhs, index),
+					KineticType::StrKeyMap       => replace_skmap(rhs, index),
+					KineticType::Json            => replace_json(rhs, index),
+					KineticType::KeyMapValue     => replace_keymapvalue(rhs, index),
+					KineticType::Math            => replace_math(rhs, index),
+					KineticType::Firebase        => replace_firebase(rhs, index),
+					KineticType::System          => replace_system(rhs, index),
 					_ => warn!("Unrecognised types: {} -> {}", lhs, rhs)
 				}
 			},
@@ -214,156 +234,178 @@ fn replace_str_list(expr: &mut Expression, index: i32) {
 }
 
 
-// Display
-fn replace_sheet(expr: &mut Expression, index: i32) {
-	match index {
-		0x01000000 => *expr = var_expr("tables", KineticType::TableList),
-		_ => warn!("Unrecognised sheet field {:#x}", index)
+mod display {
+	use super::*;
+	pub fn replace_sheet(expr: &mut Expression, index: i32) {
+		match index {
+			0x01000000 => *expr = var_expr("tables", KineticType::TableList),
+			_ => warn!("Unrecognised sheet field {:#x}", index)
+		}
 	}
-}
 
-fn replace_table(expr: &mut Expression, index: i32) {
-	match index {
-		0x01000000 => *expr = var_expr("groups", KineticType::GroupList),
-		0x01000001 => *expr = named_func("create"),
-		_ => warn!("Unrecognised table field {:#x}", index)
+	pub fn replace_table(expr: &mut Expression, index: i32) {
+		match index {
+			0x01000000 => *expr = var_expr("groups", KineticType::GroupList),
+			0x01000001 => *expr = named_func("create"),
+			0x01000003 => *expr = named_func("exists"),
+			_ => warn!("Unrecognised table field {:#x}", index)
+		}
 	}
-}
 
-fn replace_group(expr: &mut Expression, index: i32) {
-	match index {
-		0x01000000 => *expr = var_expr("cells", KineticType::CellList),
-		0x01000001 => *expr = named_func("create"),
-		0x01000002 => *expr = named_func("delete"),
-		0x01000003 => *expr = named_func("exists"),
-		//0x01000005 => *expr = named_func("on_off"),	// anime_type
-		0x0100000A => *expr = var_expr("dp_pos_x_event_pointer", KineticType::IntPointer),
-		0x0100000B => *expr = var_expr("dp_pos_y_event_pointer", KineticType::IntPointer),
-		0x0100000C => *expr = var_expr("dp_tr_event_pointer", KineticType::IntPointer),
-		0x0100000D => *expr = named_func("set_free_pos_enable"),
-		0x0100000E => *expr = named_func("set_base_clip_rect"),
-		0x0100000F => *expr = named_func("set_base_clip_x1x2"),
-		0x01000010 => *expr = named_func("set_base_clip_y1y2"),
-		0x01000011 => *expr = named_func("set_base_clip_x1"),
-		0x01000012 => *expr = named_func("set_base_clip_x2"),
-		0x01000013 => *expr = named_func("set_base_clip_y1"),
-		0x01000014 => *expr = named_func("set_base_clip_y2"),
-	
-		0x0 => *expr = named_func("delete_cells"),
-		_ => warn!("Unrecognised group field {:#x}", index)
+	pub fn replace_group(expr: &mut Expression, index: i32) {
+		match index {
+			0x01000000 => *expr = var_expr("cells", KineticType::CellList),
+			0x01000001 => *expr = named_func("create"),
+			0x01000002 => *expr = named_func("delete"),
+			0x01000003 => *expr = named_func("exists"),
+			//0x01000005 => *expr = named_func("on_off"),	// anime_type
+			0x0100000A => *expr = var_expr("dp_pos_x_event_pointer", KineticType::IntPointer),
+			0x0100000B => *expr = var_expr("dp_pos_y_event_pointer", KineticType::IntPointer),
+			0x0100000C => *expr = var_expr("dp_tr_event_pointer", KineticType::IntPointer),
+			0x0100000D => *expr = named_func("set_free_pos_enable"),
+			0x0100000E => *expr = named_func("set_base_clip_rect"),
+			0x0100000F => *expr = named_func("set_base_clip_x1x2"),
+			0x01000010 => *expr = named_func("set_base_clip_y1y2"),
+			0x01000011 => *expr = named_func("set_base_clip_x1"),
+			0x01000012 => *expr = named_func("set_base_clip_x2"),
+			0x01000013 => *expr = named_func("set_base_clip_y1"),
+			0x01000014 => *expr = named_func("set_base_clip_y2"),
+		
+			0x0 => *expr = named_func("delete_cells"),
+			_ => warn!("Unrecognised group field {:#x}", index)
+		}
 	}
-}
 
-fn replace_cell(expr: &mut Expression, index: i32) {
-	match index {
-		0x01000000 => *expr = var_expr("uis", KineticType::UiList),
-		0x01000001 => *expr = named_func("create"),
-		0x0100000F => *expr = named_func("set_select_state"),	// scale, fog-bright
-		0x01000011 => *expr = named_func("set_se"),
-		0x01000012 => *expr = named_func("exists"),
-		0x01000016 => *expr = int_var_expr("dp_pos_x"),
-		0x01000017 => *expr = int_var_expr("dp_pos_y"),
-		0x01000018 => *expr = int_var_expr("dp_tr"),
-		0x01000019 => *expr = var_expr("dp_pos_x_event_pointer", KineticType::IntPointer),
-		0x0100001B => *expr = var_expr("dp_tr_event_pointer", KineticType::IntPointer),
-		0x0100002A => *expr = named_func("set_fixed_width"),
-		0x01000031 => *expr = int_var_expr("btn_id_pointer"),
-		0x01000033 => *expr = named_func("set_own_clip_rect"),
-		0x01000034 => *expr = named_func("set_own_clip_x1x2"),
-		0x01000035 => *expr = named_func("set_own_clip_y1y2"),
-		0x01000036 => *expr = named_func("set_own_clip_x1"),
-		0x01000037 => *expr = named_func("set_own_clip_x2"),
-		0x01000038 => *expr = named_func("set_own_clip_y1"),
-		0x01000039 => *expr = named_func("set_own_clip_y2"),
+	pub fn replace_cell(expr: &mut Expression, index: i32) {
+		match index {
+			0x01000000 => *expr = var_expr("uis", KineticType::UiList),
+			0x01000001 => *expr = named_func("create"),
+			0x01000009 => *expr = named_func("set_waku_color_0"),
+			0x0100000A => *expr = named_func("set_waku_color_1"),
+			0x0100000B => *expr = named_func("set_waku_color_2"),
+			0x0100000C => *expr = named_func("set_waku_color_3"),
+			0x0100000F => *expr = named_func("set_select_state"),	// scale, fog-bright
+			0x01000011 => *expr = named_func("set_se"),
+			0x01000012 => *expr = named_func("exists"),
+			0x01000013 => *expr = named_func("set_anime_type_onoff#1"),
+			0x01000014 => *expr = named_func("set_anime_type_onoff#2"),
+			0x01000016 => *expr = int_var_expr("dp_pos_x"),
+			0x01000017 => *expr = int_var_expr("dp_pos_y"),
+			0x01000018 => *expr = int_var_expr("dp_tr"),
+			0x01000019 => *expr = var_expr("dp_pos_x_event_pointer", KineticType::IntPointer),
+			0x0100001B => *expr = var_expr("dp_tr_event_pointer", KineticType::IntPointer),
+			0x0100002A => *expr = named_func("set_fixed_width"),
+			0x01000031 => *expr = int_var_expr("btn_id_pointer"),
+			0x01000033 => *expr = named_func("set_own_clip_rect"),
+			0x01000034 => *expr = named_func("set_own_clip_x1x2"),
+			0x01000035 => *expr = named_func("set_own_clip_y1y2"),
+			0x01000036 => *expr = named_func("set_own_clip_x1"),
+			0x01000037 => *expr = named_func("set_own_clip_x2"),
+			0x01000038 => *expr = named_func("set_own_clip_y1"),
+			0x01000039 => *expr = named_func("set_own_clip_y2"),
 
-		0x00 => *expr = int_var_expr("canvas_scale_x"),
-		0x01 => *expr = int_var_expr("canvas_scale_y"),
-		0x02 => *expr = int_var_expr("canvas_dp_center_rep_x"),
-		0x03 => *expr = int_var_expr("canvas_dp_center_rep_y"),
-		0x04 => *expr = var_expr("canvas_dp_center_rep_x_event_pointer", KineticType::IntPointer),
-		0x05 => *expr = var_expr("canvas_dp_center_rep_y_event_pointer", KineticType::IntPointer),
-		0x15 => *expr = named_func("set_canvas_height"),
-		_ => warn!("Unrecognised cell field {:#x}", index)
+			0x00 => *expr = int_var_expr("canvas_scale_x"),
+			0x01 => *expr = int_var_expr("canvas_scale_y"),
+			0x02 => *expr = int_var_expr("canvas_dp_center_rep_x"),
+			0x03 => *expr = int_var_expr("canvas_dp_center_rep_y"),
+			0x04 => *expr = var_expr("canvas_dp_center_rep_x_event_pointer", KineticType::IntPointer),
+			0x05 => *expr = var_expr("canvas_dp_center_rep_y_event_pointer", KineticType::IntPointer),
+			0x15 => *expr = named_func("set_canvas_height"),
+			_ => warn!("Unrecognised cell field {:#x}", index)
+		}
 	}
-}
 
-fn replace_ui(expr: &mut Expression, index: i32) {
-	match index {
-		0x01000000 => *expr = named_func("create_image"),
-		0x01000005 => *expr = named_func("create_string"),
-		0x01000006 => *expr = named_func("set_string_moji_size"),
-		0x01000007 => *expr = named_func("set_string_param"),
+	pub fn replace_ui(expr: &mut Expression, index: i32) {
+		match index {
+			0x01000000 => *expr = named_func("create_image"),
+			0x01000001 => *expr = named_func("create_button#1"),
+			0x01000002 => *expr = named_func("create_button#2"),
+			0x01000003 => *expr = named_func("add_toggle_button#1"),
+			0x01000004 => *expr = named_func("add_toggle_button#2"),
+			0x01000005 => *expr = named_func("create_string"),
+			0x01000006 => *expr = named_func("set_string_moji_size"),
+			0x01000007 => *expr = named_func("set_string_param"),
+			0x01000008 => *expr = named_func("create_number"),
+			0x01000009 => *expr = named_func("set_number_value"),
+			0x0100000A => *expr = named_func("set_number_param"),
 
-		0x01000025 => *expr = named_func("set_select_state"),	// alpha, bright, dark, scale, fog_bright
-		0x01000030 => *expr = named_func("set_string"),
-		0x01000031 => *expr = named_func("set_waku_color_0"),
-		0x01000032 => *expr = named_func("set_waku_color_1"),
-		0x01000033 => *expr = named_func("set_waku_color_2"),
-		0x01000034 => *expr = named_func("set_waku_color_3"),
-		0x01000035 => *expr = named_func("set_moji_decoration_normal"),
-		0x01000036 => *expr = named_func("set_moji_decoration_hit"),
-		0x01000037 => *expr = named_func("set_moji_decoration_select"),
-		0x01000038 => *expr = named_func("set_moji_decoration_not"),
+			0x01000025 => *expr = named_func("set_select_state"),	// alpha, bright, dark, scale, fog_bright
+			0x01000030 => *expr = named_func("set_string"),
+			0x01000031 => *expr = named_func("set_waku_color_0"),
+			0x01000032 => *expr = named_func("set_waku_color_1"),
+			0x01000033 => *expr = named_func("set_waku_color_2"),
+			0x01000034 => *expr = named_func("set_waku_color_3"),
+			0x01000035 => *expr = named_func("set_moji_decoration_normal"),
+			0x01000036 => *expr = named_func("set_moji_decoration_hit"),
+			0x01000037 => *expr = named_func("set_moji_decoration_select"),
+			0x01000038 => *expr = named_func("set_moji_decoration_not"),
+			
+			0x0100003B => *expr = named_func("set_toggle_button_value"),
+			0x0100003C => *expr = named_func("get_toggle_button_value"),
+			0x0100003D => *expr = named_func("get_number_value"),
 
-		0x01000043 => *expr = var_expr("scale_alignment_x_event_pointer", KineticType::IntPointer),
-		0x01000044 => *expr = var_expr("scale_alignment_y_event_pointer", KineticType::IntPointer),
-		0x01000045 => *expr = int_var_expr("scale_alignment_x"),
-		0x01000046 => *expr = int_var_expr("scale_alignment_y"),
+			0x01000043 => *expr = var_expr("scale_alignment_x_event_pointer", KineticType::IntPointer),
+			0x01000044 => *expr = var_expr("scale_alignment_y_event_pointer", KineticType::IntPointer),
+			0x01000045 => *expr = int_var_expr("scale_alignment_x"),
+			0x01000046 => *expr = int_var_expr("scale_alignment_y"),
 
-		0x01000048 => *expr = int_var_expr("dp_priority_layer"),
-		0x0100004A => *expr = named_func("create_waku"),
-		0x0100004B => *expr = int_var_expr("dp_tr<to check!>"),
-		0x0100004C => *expr = int_var_expr("dp_scale_x"),
-		0x0100004D => *expr = int_var_expr("dp_scale_y"),
-		0x0100004E => *expr = int_var_expr("dp_rotate_z"),
-		0x0100004F => *expr = var_expr("dp_tr_event_pointer", KineticType::IntPointer),
-		0x01000050 => *expr = var_expr("dp_scale_x_event_pointer", KineticType::IntPointer),
-		0x01000051 => *expr = var_expr("dp_scale_y_event_pointer", KineticType::IntPointer),
-		0x01000052 => *expr = var_expr("dp_scale_y_event_pointer", KineticType::IntPointer),
-		0x01000053 => *expr = int_var_expr("dp_center_rep_x"),
-		0x01000054 => *expr = int_var_expr("dp_center_rep_y"),
+			0x01000048 => *expr = int_var_expr("dp_priority_layer"),
+			0x0100004A => *expr = named_func("create_waku"),
+			0x0100004B => *expr = int_var_expr("dp_tr"),
+			0x0100004C => *expr = int_var_expr("dp_scale_x"),
+			0x0100004D => *expr = int_var_expr("dp_scale_y"),
+			0x0100004E => *expr = int_var_expr("dp_rotate_z"),
+			0x0100004F => *expr = var_expr("dp_tr_event_pointer", KineticType::IntPointer),
+			0x01000050 => *expr = var_expr("dp_scale_x_event_pointer", KineticType::IntPointer),
+			0x01000051 => *expr = var_expr("dp_scale_y_event_pointer", KineticType::IntPointer),
+			0x01000052 => *expr = var_expr("dp_rotate_z_event_pointer", KineticType::IntPointer),
+			0x01000053 => *expr = int_var_expr("dp_center_rep_x"),
+			0x01000054 => *expr = int_var_expr("dp_center_rep_y"),
 
-		0x01000057 => *expr = int_var_expr("dp_center_pos_x"),
-		0x01000058 => *expr = int_var_expr("dp_center_pos_y"),
-	
-		0x01000066 => *expr = int_var_expr("dp_dark"),
-		0x01000069 => *expr = var_expr("dp_dark_event_pointer", KineticType::IntPointer),
+			0x01000057 => *expr = int_var_expr("dp_center_pos_x"),
+			0x01000058 => *expr = int_var_expr("dp_center_pos_y"),
+		
+			0x01000066 => *expr = int_var_expr("dp_dark"),
+			0x01000069 => *expr = var_expr("dp_dark_event_pointer", KineticType::IntPointer),
 
-		0x0100006D => *expr = named_func("set_se"),
-		0x0100006E => *expr = named_func("exists"),
+			0x0100006C => *expr = named_func("delete"),
+			0x0100006D => *expr = named_func("set_se"),
+			0x0100006E => *expr = named_func("exists"),
 
-		0x01000077 => *expr = int_var_expr("dp_disp"),
-		0x0100007D => *expr = int_var_expr("btn_id"),
-		0x010000AB => *expr = var_expr("units", KineticType::UnitList),
+			0x01000077 => *expr = int_var_expr("dp_disp"),
+			0x01000078 => *expr = int_var_expr("dp_blend"),
+			0x0100007D => *expr = int_var_expr("btn_id"),
+			0x010000AB => *expr = var_expr("units", KineticType::UnitList),
 
-		0x00 => *expr = int_var_expr("dp_color_r"),
-		0x01 => *expr = int_var_expr("dp_color_g"),
-		0x02 => *expr = int_var_expr("dp_color_b"),
-		0x07 => *expr = var_expr("dp_fog_bright_event_pointer", KineticType::IntPointer),
-		_ => warn!("Unrecognised ui field {:#x}", index)
+			0x00 => *expr = int_var_expr("dp_color_r"),
+			0x01 => *expr = int_var_expr("dp_color_g"),
+			0x02 => *expr = int_var_expr("dp_color_b"),
+			0x07 => *expr = var_expr("dp_fog_bright_event_pointer", KineticType::IntPointer),
+			_ => warn!("Unrecognised ui field {:#x}", index)
+		}
 	}
-}
 
-fn replace_unit(expr: &mut Expression, index: i32) {
-	match index {
-		0x01000000 => *expr = named_func("exists"),
-		0x01000001 => *expr = named_func("create"),
-		0x01000002 => *expr = named_func("delete"),
-		0x01000003 => *expr = int_var_expr("dp_disp"),
-		0x01000004 => *expr = int_var_expr("dp_pat_no"),
-		0x01000005 => *expr = int_var_expr("dp_pos_x"),
-		0x01000006 => *expr = int_var_expr("dp_pos_y"),
-		0x01000007 => *expr = int_var_expr("dp_tr"),
-		0x01000008 => *expr = var_expr("dp_pat_no_event_ptr", KineticType::IntPointer),
-		0x01000009 => *expr = var_expr("dp_pos_x_event_ptr", KineticType::IntPointer),
-		0x0100000A => *expr = var_expr("dp_pos_y_event_ptr", KineticType::IntPointer),
-		0x0100000B => *expr = var_expr("dp_tr_event_ptr", KineticType::IntPointer),
-		0x0100000C => *expr = named_func("init_param"),
-		0x0100000D => *expr = named_func("set_param"),
-		0x0100000E => *expr = named_func("set_pos"),
-		0x01000014 => *expr = int_var_expr("dp_priority_order"),
-		0x0100003C => *expr = var_expr("dp_priority_order_event_ptr", KineticType::IntPointer),
-		_ => warn!("Unrecognised unit field {:#x}", index)
+	pub fn replace_unit(expr: &mut Expression, index: i32) {
+		match index {
+			0x01000000 => *expr = named_func("exists"),
+			0x01000001 => *expr = named_func("create"),
+			0x01000002 => *expr = named_func("delete"),
+			0x01000003 => *expr = int_var_expr("dp_disp"),
+			0x01000004 => *expr = int_var_expr("dp_pat_no"),
+			0x01000005 => *expr = int_var_expr("dp_pos_x"),
+			0x01000006 => *expr = int_var_expr("dp_pos_y"),
+			0x01000007 => *expr = int_var_expr("dp_tr"),
+			0x01000008 => *expr = var_expr("dp_pat_no_event_ptr", KineticType::IntPointer),
+			0x01000009 => *expr = var_expr("dp_pos_x_event_ptr", KineticType::IntPointer),
+			0x0100000A => *expr = var_expr("dp_pos_y_event_ptr", KineticType::IntPointer),
+			0x0100000B => *expr = var_expr("dp_tr_event_ptr", KineticType::IntPointer),
+			0x0100000C => *expr = named_func("init_param"),
+			0x0100000D => *expr = named_func("set_param"),
+			0x0100000E => *expr = named_func("set_pos"),
+			0x01000014 => *expr = int_var_expr("dp_priority_order"),
+			0x0100003C => *expr = var_expr("dp_priority_order_event_ptr", KineticType::IntPointer),
+			_ => warn!("Unrecognised unit field {:#x}", index)
+		}
 	}
 }
 
@@ -463,6 +505,14 @@ fn replace_touch(_expr: &mut Expression, index: i32) {
 	}
 }
 
+fn replace_timerate(expr: &mut Expression, index: i32) {
+	match index {
+		0x01000000 => *expr = named_func("init"),
+		0x01000001 => *expr = named_func("set"),
+		_ => warn!("Unrecognised control time rate field {:#x}", index)
+	}
+}
+
 fn replace_math(expr: &mut Expression, index: i32) {
 	match index {
 		0x00 => *expr = named_func("randint"),	// Inclusive integer in [a, b], implementation is with a modulo
@@ -474,6 +524,7 @@ fn replace_math(expr: &mut Expression, index: i32) {
 		0x07 => *expr = named_func("cosine"),
 		0x09 => *expr = named_func("lerp"),
 		0x0a => *expr = named_func("clamp"),
+		0x0b => *expr = named_func("to_string_padded"),
 		0x0e => *expr = named_func("sqrt_mult"), // sqrt_mult(a, b) = sqrt(a) * b
 		0x14 => *expr = named_func("logarithm"), // logarithm is base 2 with constant mult
 		0x16 => *expr = named_func("get_angle"),
@@ -511,10 +562,10 @@ fn int_var_expr(name: &str) -> Expression {
 	}.to_expression()
 }
 
-fn var_expr(name: &str, k_type: KineticType) -> Expression {
+fn var_expr<T: ToVarType>(name: &str, v_type: T) -> Expression {
 	Variable {
 		name: name.to_string(),
-		var_type: k_type.to_var_type()
+		var_type: v_type.to_var_type()
 	}.to_expression()
 }
 

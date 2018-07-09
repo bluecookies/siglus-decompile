@@ -393,6 +393,9 @@ impl std::fmt::Display for Expression {
 				let option_str = if option == 0 { String::new() } else { format!("{{{}}}", option) };
 				let extra_param_str = if extra_params.is_empty() { String::new() } else { format!("<{}>", format_list(extra_params)) };
 				let extra_str = if let Some(extra) = extra { format!(", {}", extra) } else { String::new() };
+				if let &Expression::Variable(_) = function.as_ref() {
+					warn!("Function {} is a variable", function);
+				}
 				write!(f, "{}{}({}){}{}", function, option_str, format_list(args), extra_param_str, extra_str)
 			},
 			Expression::System(num) => write!(f, "sys_{:#x}", num),

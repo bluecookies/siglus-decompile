@@ -217,6 +217,7 @@ fn replace_member(lhs: &mut Expression, rhs: &mut Expression) {
 fn replace_int_list(expr: &mut Expression, index: i32) {
 	match index {
 		0x02 => *expr = named_func("resize"),
+		0x08 => *expr = named_func("memset"),
 		0x09 => *expr = named_func("length"),
 		0x0a => *expr = named_func("reset"),
 		0x0100000B => *expr = named_func("push"),
@@ -474,6 +475,7 @@ fn replace_ikmap(expr: &mut Expression, index: i32) {
 
 		//0x00 => sort		
 		//0x01 => add and get pointer?	
+		0x03 => *expr = named_func("from_array"),
 		_ => warn!("Unrecognised int key map field {:#x}", index)
 	}
 }
@@ -491,16 +493,24 @@ fn replace_skmap(expr: &mut Expression, index: i32) {
 		0x01000008 => *expr = var_expr("indices", KineticType::SKMapIndexList),
 		//0x01000009 => length
 		0x0100000A => *expr = named_func("sort"),
+
+		0x02 => *expr = named_func("from_array"),
 		_ => warn!("Unrecognised str key map field {:#x}", index)
 	}
 }
 
 fn replace_json(expr: &mut Expression, index: i32) {
 	match index {
+		// convert JSON array of objects with int/str fields
+		// to an array of ints/strs 
+		0x00 => *expr = named_func("parallel_array_int"),
+		0x01 => *expr = named_func("parallel_array_str"),
+		0x01000007 => *expr = named_func("get_int_field"),
 		0x01000008 => *expr = named_func("get_str_field"),
 		0x0100000C => *expr = named_func("exists"),
 		0x0100000F => *expr = named_func("length"),
 		//0x01000010 => *expr = named_func("get_int"),
+		0x01000016 => *expr = named_func("from_file"),
 
 		_ => warn!("Unrecognised json field {:#x}", index)
 	}

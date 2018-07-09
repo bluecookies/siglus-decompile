@@ -107,7 +107,7 @@ impl ProgStack {
 	pub fn get_value(&mut self, var_type: VariableType) -> Expression {
 		match var_type {
 			VariableType::Int | VariableType::Str => self.pop(var_type),
-			VariableType::IntRef | VariableType::StrRef | VariableType::IntListRef =>
+			VariableType::IntRef | VariableType::StrRef | VariableType::IntListRef | VariableType::StrListRef =>
 				if self.peek_type() == Some(var_type) {
 					self.pop(var_type)
 				} else {

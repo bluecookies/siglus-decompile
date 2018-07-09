@@ -56,6 +56,7 @@ pub enum VariableType {
 	Str,            //0x14
 	StrList(usize), //0x15
 	StrRef,         //0x17
+	StrListRef,     //0x18
 	Obj,            //0x51e
 	ObjList(usize),
 	StageElem,      //0x514
@@ -120,6 +121,7 @@ impl VariableType {
 			0x14 => VariableType::Str,
 			0x15 => VariableType::StrList(0),
 			0x17 => VariableType::StrRef,
+			0x18 => VariableType::StrListRef,
 			0x51e => VariableType::Obj,
 			0x514 => VariableType::StageElem,
 			_ => {
@@ -159,6 +161,7 @@ impl std::fmt::Display for VariableType {
 			VariableType::Str => write!(f, "str"),
 			VariableType::StrList(len) => write!(f, "str[{}]", len),
 			VariableType::StrRef => write!(f, "&str"),
+			VariableType::StrListRef => write!(f, "&str[]"),
 			VariableType::Obj => write!(f, "obj"),
 			VariableType::ObjList(len) => write!(f, "obj[{}]", len),
 			VariableType::StageElem => write!(f, "stage_elem"),

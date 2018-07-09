@@ -1,3 +1,7 @@
+// TODO: handle reference types properly (0x0d)
+//	since they can actually be used as pointers in system functions
+//	maybe even user defined commands
+
 // TODO: attach opcode addresses to instructions in basic blocks
 // 	check if a target address is already inside a basic block
 //	and split it if so
@@ -44,16 +48,17 @@ use kinetic_lib::KineticType;
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum VariableType {
-	Void,	//0x00
-	Int,	//0x0a
-	IntList(usize),	//0x0b
-	IntRef,	//0x0d
-	Str,	//0x14
-	StrList(usize),	//0x15
-	StrRef,	//0x17
-	Obj,	//0x51e
+	Void,           //0x00
+	Int,            //0x0a
+	IntList(usize), //0x0b
+	IntRef,         //0x0d
+	IntListRef,     // 0x0e
+	Str,            //0x14
+	StrList(usize), //0x15
+	StrRef,         //0x17
+	Obj,            //0x51e
 	ObjList(usize),
-	StageElem,
+	StageElem,      //0x514
 	Error,
 	Unknown,
 
@@ -111,6 +116,7 @@ impl VariableType {
 			0x0a => VariableType::Int,
 			0x0b => VariableType::IntList(0),
 			0x0d => VariableType::IntRef,
+			0x0e => VariableType::IntListRef,
 			0x14 => VariableType::Str,
 			0x15 => VariableType::StrList(0),
 			0x17 => VariableType::StrRef,
@@ -149,6 +155,7 @@ impl std::fmt::Display for VariableType {
 			VariableType::Int => write!(f, "int"),
 			VariableType::IntList(len) => write!(f, "int[{}]", len),
 			VariableType::IntRef => write!(f, "&int"),
+			VariableType::IntListRef => write!(f, "&int[]"),
 			VariableType::Str => write!(f, "str"),
 			VariableType::StrList(len) => write!(f, "str[{}]", len),
 			VariableType::StrRef => write!(f, "&str"),

@@ -19,6 +19,8 @@ pub enum KineticType {
 	UnitList,
 	Unit,
 
+	SSObjPointer,
+
 	IntKeyMapList,
 	IntKeyMap,
 	StrKeyMapList,
@@ -95,8 +97,6 @@ impl ToVarType for VariableType {
 	}
 }
 
-
-
 impl fmt::Display for KineticType {
 	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
 		match *self {
@@ -112,6 +112,7 @@ impl fmt::Display for KineticType {
 			KineticType::Ui                   => write!(f, "k_ui"),
 			KineticType::UnitList             => write!(f, "k_unit[]"),
 			KineticType::Unit                 => write!(f, "k_unit"),
+			KineticType::SSObjPointer         => write!(f, "k_ssobj_pointer"),
 			KineticType::CounterList          => write!(f, "k_counter[]"),
 			KineticType::Counter              => write!(f, "k_counter"),
 			KineticType::SndBgmElem           => write!(f, "k_snd_bgm_elem"),
@@ -190,16 +191,16 @@ fn replace_member(lhs: &mut Expression, rhs: &mut Expression) {
 					KineticType::Counter         => replace_counter(rhs, index),
 					KineticType::SndBgmElem      => replace_bgm_elem(rhs, index),
 					KineticType::SndPcmEsElem    => replace_pcmes_elem(rhs, index),
-					KineticType::Touch           => replace_touch(rhs, index),
-					KineticType::TimeRate        => replace_timerate(rhs, index),
 					KineticType::IntPointer      => replace_int_event_pointer(rhs, index),
 					KineticType::IntKeyMap       => replace_ikmap(rhs, index),
 					KineticType::StrKeyMap       => replace_skmap(rhs, index),
 					KineticType::Json            => replace_json(rhs, index),
 					KineticType::KeyMapValue     => replace_keymapvalue(rhs, index),
-					KineticType::Math            => replace_math(rhs, index),
-					KineticType::Firebase        => replace_firebase(rhs, index),
-					KineticType::System          => replace_system(rhs, index),
+					KineticType::Touch           => special::replace_touch(rhs, index),
+					KineticType::TimeRate        => special::replace_timerate(rhs, index),
+					KineticType::Math            => special::replace_math(rhs, index),
+					KineticType::Firebase        => special::replace_firebase(rhs, index),
+					KineticType::System          => special::replace_system(rhs, index),
 					_ => warn!("Unrecognised types: {} -> {}", lhs, rhs)
 				}
 			},
@@ -259,6 +260,9 @@ mod display {
 			0x01000002 => *expr = named_func("delete"),
 			0x01000003 => *expr = named_func("exists"),
 			//0x01000005 => *expr = named_func("on_off"),	// anime_type
+			0x01000007 => *expr = int_var_expr("dp_pos_x"),
+			0x01000008 => *expr = int_var_expr("dp_pos_y"),
+			0x01000009 => *expr = int_var_expr("dp_tr"),
 			0x0100000A => *expr = var_expr("dp_pos_x_event_pointer", KineticType::IntPointer),
 			0x0100000B => *expr = var_expr("dp_pos_y_event_pointer", KineticType::IntPointer),
 			0x0100000C => *expr = var_expr("dp_tr_event_pointer", KineticType::IntPointer),
@@ -375,6 +379,14 @@ mod display {
 			0x01000077 => *expr = int_var_expr("dp_disp"),
 			0x01000078 => *expr = int_var_expr("dp_blend"),
 			0x0100007D => *expr = int_var_expr("btn_id"),
+
+			0x010000A2 => *expr = named_func("create_ssobj#1"),
+			0x010000A3 => *expr = var_expr("ssobjctr_pointer", KineticType::SSObjPointer),
+			0x010000A5 => *expr = named_func("create_particle"),
+			0x010000A6 => *expr = named_func("create_ssobj#2"),
+			0x010000A8 => *expr = named_func("create_omv"),
+			0x010000A9 => *expr = named_func("image_alloc_unit"),
+			0x010000AA => *expr = named_func("image_free_unit"),
 			0x010000AB => *expr = var_expr("units", KineticType::UnitList),
 
 			0x00 => *expr = int_var_expr("dp_color_r"),
@@ -422,6 +434,7 @@ fn replace_counter(expr: &mut Expression, index: i32) {
 		0x07 => *expr = named_func("check"),	//checks >= XXX
 		0x08 => *expr = named_func("wait<true>"),
 		0x09 => *expr = named_func("start_counter<true>"),
+		0x0e => *expr = named_func("is_active"),
 		_ => warn!("Unrecognised counter field {:#x}", index)
 	}
 }
@@ -451,12 +464,13 @@ fn replace_ikmap(expr: &mut Expression, index: i32) {
 	match index {
 		0x01000000 => *expr = named_func("free"),
 		0x01000001 => *expr = named_func("add"),
+		0x01000002 => *expr = named_func("del_for_key"),
 		0x01000004 => *expr = named_func("key_exists"),
 		0x01000005 => *expr = named_func("index_exists"),
-		//0x01000006 => *expr = named_func("get_key_for_index"),
+		0x01000006 => *expr = named_func("get_key_for_index"),
 		0x01000007 => *expr = var_expr("keys", KineticType::IKMapKeyList),
 		0x01000008 => *expr = var_expr("indices", KineticType::IKMapIndexList),
-		//0x01000009 => length
+		0x01000009 => *expr = named_func("length"),
 
 		//0x00 => sort		
 		//0x01 => add and get pointer?	
@@ -483,9 +497,10 @@ fn replace_skmap(expr: &mut Expression, index: i32) {
 
 fn replace_json(expr: &mut Expression, index: i32) {
 	match index {
+		0x01000008 => *expr = named_func("get_str_field"),
 		0x0100000C => *expr = named_func("exists"),
 		0x0100000F => *expr = named_func("length"),
-		0x01000010 => *expr = named_func("get_int"),
+		//0x01000010 => *expr = named_func("get_int"),
 
 		_ => warn!("Unrecognised json field {:#x}", index)
 	}
@@ -498,58 +513,65 @@ fn replace_keymapvalue(expr: &mut Expression, index: i32) {
 	}
 }
 
-// Special 
-fn replace_touch(_expr: &mut Expression, index: i32) {
-	match index {
-		_ => warn!("Unrecognised touch field {:#x}", index)
+// Mostly singletons
+mod special {
+	use super::*;
+	pub fn replace_touch(_expr: &mut Expression, index: i32) {
+		match index {
+			_ => warn!("Unrecognised touch field {:#x}", index)
+		}
 	}
-}
 
-fn replace_timerate(expr: &mut Expression, index: i32) {
-	match index {
-		0x01000000 => *expr = named_func("init"),
-		0x01000001 => *expr = named_func("set"),
-		_ => warn!("Unrecognised control time rate field {:#x}", index)
+	pub fn replace_timerate(expr: &mut Expression, index: i32) {
+		match index {
+			0x01000000 => *expr = named_func("init"),
+			0x01000001 => *expr = named_func("set"),
+			_ => warn!("Unrecognised control time rate field {:#x}", index)
+		}
 	}
-}
 
-fn replace_math(expr: &mut Expression, index: i32) {
-	match index {
-		0x00 => *expr = named_func("randint"),	// Inclusive integer in [a, b], implementation is with a modulo
-		0x01 => *expr = named_func("to_string"),
-		0x03 => *expr = named_func("max"),
-		0x04 => *expr = named_func("min"),
-		0x05 => *expr = named_func("abs"),
-		0x06 => *expr = named_func("sine"),		// sine(a, b) = a * sine(10 * rad(b))
-		0x07 => *expr = named_func("cosine"),
-		0x09 => *expr = named_func("lerp"),
-		0x0a => *expr = named_func("clamp"),
-		0x0b => *expr = named_func("to_string_padded"),
-		0x0e => *expr = named_func("sqrt_mult"), // sqrt_mult(a, b) = sqrt(a) * b
-		0x14 => *expr = named_func("logarithm"), // logarithm is base 2 with constant mult
-		0x16 => *expr = named_func("get_angle"),
-		_ => warn!("Unrecognised math function {:#x}", index)
+	pub fn replace_math(expr: &mut Expression, index: i32) {
+		match index {
+			0x00 => *expr = named_func("randint"),	// Inclusive integer in [a, b], implementation is with a modulo
+			0x01 => *expr = named_func("to_string"),
+			0x03 => *expr = named_func("max"),
+			0x04 => *expr = named_func("min"),
+			0x05 => *expr = named_func("abs"),
+			0x06 => *expr = named_func("sine"),		// sine(a, b) = a * sine(10 * rad(b))
+			0x07 => *expr = named_func("cosine"),
+			0x09 => *expr = named_func("lerp"),
+			0x0a => *expr = named_func("clamp"),
+			0x0b => *expr = named_func("to_string_padded"),
+			0x0e => *expr = named_func("sqrt_mult"), // sqrt_mult(a, b) = sqrt(a) * b
+			0x14 => *expr = named_func("logarithm"), // logarithm is base 2 with constant mult
+			0x16 => *expr = named_func("get_angle"),
+			_ => warn!("Unrecognised math function {:#x}", index)
+		}
 	}
-}
 
-fn replace_system(expr: &mut Expression, index: i32) {
-	match index {
-		0x01000001 => *expr = named_func("get_date_info"),
-		0x01000002 => *expr = named_func("get_unix_time"),
-		_ => warn!("Unrecognised system function {:#x}", index)
+	pub fn replace_system(expr: &mut Expression, index: i32) {
+		match index {
+			0x01000001 => *expr = named_func("get_date_info"),
+			0x01000002 => *expr = named_func("get_unix_time"),
+			0x01000014 => *expr = named_func("get_screen_height"),
+			0x01000015 => *expr = named_func("get_screen_width"),
+			//0x01000016 => *expr = named_func("get_screen_size"),
+			0x0B => *expr = named_func("log"),
+			_ => warn!("Unrecognised system function {:#x}", index)
+		}
 	}
-}
 
-fn replace_firebase(expr: &mut Expression, index: i32) {
-	match index {
-		0x00 => *expr = named_func("set_user_property"),
-		0x01 => *expr = named_func("add_int_value"),
-		0x02 => *expr = named_func("add_string_value"),
-		0x03 => *expr = named_func("log_event"),
-		0x04 => *expr = named_func("init_event"),
-		0x05 => *expr = named_func("subscribe_topic"),
-		0x06 => *expr = named_func("unsubscribe_topic"),
-		_ => warn!("Unrecognised firebase function {:#x}", index)
+	pub fn replace_firebase(expr: &mut Expression, index: i32) {
+		match index {
+			0x00 => *expr = named_func("set_user_property"),
+			0x01 => *expr = named_func("add_int_value"),
+			0x02 => *expr = named_func("add_string_value"),
+			0x03 => *expr = named_func("log_event"),
+			0x04 => *expr = named_func("init_event"),
+			0x05 => *expr = named_func("subscribe_topic"),
+			0x06 => *expr = named_func("unsubscribe_topic"),
+			_ => warn!("Unrecognised firebase function {:#x}", index)
+		}
 	}
 }
 

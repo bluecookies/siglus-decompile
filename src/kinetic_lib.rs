@@ -163,6 +163,7 @@ fn replace_global(expr: &mut Expression, index: i32) {
 		0x01000019 => *expr = var_expr("g_json_list", KineticType::JsonList),
 		0x03 => *expr = named_func("goto_menu?"),
 		0x1F => *expr = var_expr("g_int_list", VariableType::IntList(0)),
+		0x23 => *expr = var_expr("g_str_list", VariableType::StrList(0)),
 		0x27 => *expr = var_expr("g_math", KineticType::Math),
 		0x28 => *expr = var_expr("g_counters", KineticType::CounterList),
 		0x2A => *expr = var_expr("g_sndbgm_element", KineticType::SndBgmElem),
@@ -250,6 +251,15 @@ mod display {
 			0x01000000 => *expr = var_expr("groups", KineticType::GroupList),
 			0x01000001 => *expr = named_func("create"),
 			0x01000003 => *expr = named_func("exists"),
+			0x01000004 => *expr = named_func("set_anime_on"),
+			0x01000005 => *expr = named_func("set_anime_off"),
+			//0x01000007 => *expr = int_var_expr("dp_pos_x"),
+			//0x01000008 => *expr = int_var_expr("dp_pos_y"),
+			//0x01000009 => *expr = int_var_expr("dp_tr"),
+			//0x0100000A => *expr = var_expr("dp_pos_x_event_pointer", KineticType::IntPointer),
+			//0x0100000B => *expr = var_expr("dp_pos_y_event_pointer", KineticType::IntPointer),
+			//0x0100000C => *expr = var_expr("dp_tr_event_pointer", KineticType::IntPointer),
+			//0x01000011 => *expr = "btn_id",
 			_ => warn!("Unrecognised table field {:#x}", index)
 		}
 	}
@@ -260,7 +270,8 @@ mod display {
 			0x01000001 => *expr = named_func("create"),
 			0x01000002 => *expr = named_func("delete"),
 			0x01000003 => *expr = named_func("exists"),
-			//0x01000005 => *expr = named_func("on_off"),	// anime_type
+			0x01000004 => *expr = named_func("set_anime_on"),
+			0x01000005 => *expr = named_func("set_anime_off"),
 			0x01000007 => *expr = int_var_expr("dp_pos_x"),
 			0x01000008 => *expr = int_var_expr("dp_pos_y"),
 			0x01000009 => *expr = int_var_expr("dp_tr"),
@@ -285,6 +296,7 @@ mod display {
 		match index {
 			0x01000000 => *expr = var_expr("uis", KineticType::UiList),
 			0x01000001 => *expr = named_func("create"),
+			0x01000002 => *expr = named_func("set_enable"),
 			0x01000009 => *expr = named_func("set_waku_color_0"),
 			0x0100000A => *expr = named_func("set_waku_color_1"),
 			0x0100000B => *expr = named_func("set_waku_color_2"),
@@ -292,8 +304,8 @@ mod display {
 			0x0100000F => *expr = named_func("set_select_state"),	// scale, fog-bright
 			0x01000011 => *expr = named_func("set_se"),
 			0x01000012 => *expr = named_func("exists"),
-			0x01000013 => *expr = named_func("set_anime_type_onoff#1"),
-			0x01000014 => *expr = named_func("set_anime_type_onoff#2"),
+			0x01000013 => *expr = named_func("set_anime_type_onoff@1"),
+			0x01000014 => *expr = named_func("set_anime_type_onoff@2"),
 			0x01000016 => *expr = int_var_expr("dp_pos_x"),
 			0x01000017 => *expr = int_var_expr("dp_pos_y"),
 			0x01000018 => *expr = int_var_expr("dp_tr"),
@@ -313,8 +325,8 @@ mod display {
 			0x01 => *expr = int_var_expr("canvas_scale_y"),
 			0x02 => *expr = int_var_expr("canvas_dp_center_rep_x"),
 			0x03 => *expr = int_var_expr("canvas_dp_center_rep_y"),
-			0x04 => *expr = var_expr("canvas_dp_center_rep_x_event_pointer", KineticType::IntPointer),
-			0x05 => *expr = var_expr("canvas_dp_center_rep_y_event_pointer", KineticType::IntPointer),
+			0x04 => *expr = var_expr("canvas_dp_scale_x_event_pointer", KineticType::IntPointer),
+			0x05 => *expr = var_expr("canvas_dp_scale_y_event_pointer", KineticType::IntPointer),
 			0x15 => *expr = named_func("set_canvas_height"),
 			_ => warn!("Unrecognised cell field {:#x}", index)
 		}
@@ -323,10 +335,10 @@ mod display {
 	pub fn replace_ui(expr: &mut Expression, index: i32) {
 		match index {
 			0x01000000 => *expr = named_func("create_image"),
-			0x01000001 => *expr = named_func("create_button#1"),
-			0x01000002 => *expr = named_func("create_button#2"),
-			0x01000003 => *expr = named_func("add_toggle_button#1"),
-			0x01000004 => *expr = named_func("add_toggle_button#2"),
+			0x01000001 => *expr = named_func("create_button@1"),
+			0x01000002 => *expr = named_func("create_button@2"),
+			0x01000003 => *expr = named_func("add_toggle_button@1"),
+			0x01000004 => *expr = named_func("add_toggle_button@2"),
 			0x01000005 => *expr = named_func("create_string"),
 			0x01000006 => *expr = named_func("set_string_moji_size"),
 			0x01000007 => *expr = named_func("set_string_param"),
@@ -370,6 +382,7 @@ mod display {
 			0x01000057 => *expr = int_var_expr("dp_center_pos_x"),
 			0x01000058 => *expr = int_var_expr("dp_center_pos_y"),
 		
+			0x01000065 => *expr = int_var_expr("dp_pat_no"),
 			0x01000066 => *expr = int_var_expr("dp_dark"),
 			0x01000069 => *expr = var_expr("dp_dark_event_pointer", KineticType::IntPointer),
 
@@ -381,10 +394,13 @@ mod display {
 			0x01000078 => *expr = int_var_expr("dp_blend"),
 			0x0100007D => *expr = int_var_expr("btn_id"),
 
-			0x010000A2 => *expr = named_func("create_ssobj#1"),
+			0x0100009E => *expr = int_var_expr("scale_alignment_w"),
+			0x0100009F => *expr = int_var_expr("scale_alignment_h"),
+
+			0x010000A2 => *expr = named_func("create_ssobj@1"),
 			0x010000A3 => *expr = var_expr("ssobjctr_pointer", KineticType::SSObjPointer),
 			0x010000A5 => *expr = named_func("create_particle"),
-			0x010000A6 => *expr = named_func("create_ssobj#2"),
+			0x010000A6 => *expr = named_func("create_ssobj@2"),
 			0x010000A8 => *expr = named_func("create_omv"),
 			0x010000A9 => *expr = named_func("image_alloc_unit"),
 			0x010000AA => *expr = named_func("image_free_unit"),
@@ -393,6 +409,10 @@ mod display {
 			0x00 => *expr = int_var_expr("dp_color_r"),
 			0x01 => *expr = int_var_expr("dp_color_g"),
 			0x02 => *expr = int_var_expr("dp_color_b"),
+			0x03 => *expr = var_expr("dp_color_r_event_pointer", KineticType::IntPointer),
+			0x04 => *expr = var_expr("dp_color_g_event_pointer", KineticType::IntPointer),
+			0x05 => *expr = var_expr("dp_color_b_event_pointer", KineticType::IntPointer),
+			0x06 => *expr = int_var_expr("dp_fog_bright"),
 			0x07 => *expr = var_expr("dp_fog_bright_event_pointer", KineticType::IntPointer),
 			_ => warn!("Unrecognised ui field {:#x}", index)
 		}
@@ -447,8 +467,9 @@ fn replace_bgm_elem(expr: &mut Expression, index: i32) {
 	}
 }
 
-fn replace_pcmes_elem(_expr: &mut Expression, index: i32) {
+fn replace_pcmes_elem(expr: &mut Expression, index: i32) {
 	match index {
+		0x00 => *expr = named_func("play"),
 		_ => warn!("Unrecognised pcmes elem field {:#x}", index)
 	}
 }
@@ -456,7 +477,10 @@ fn replace_pcmes_elem(_expr: &mut Expression, index: i32) {
 
 fn replace_int_event_pointer(expr: &mut Expression, index: i32) {
 	match index {
-		0x0100000c => *expr = named_func("add_timetable"),
+		0x00 => *expr = named_func("one_shot"),
+		0x01 => *expr = named_func("loop"),
+		0x01000000 => *expr = named_func("turn"),
+		0x0100000c => *expr = named_func("timetable"),
 		_ => warn!("Unrecognised int eve pointer field {:#x}", index)
 	}
 }
@@ -505,6 +529,7 @@ fn replace_json(expr: &mut Expression, index: i32) {
 		// to an array of ints/strs 
 		0x00 => *expr = named_func("parallel_array_int"),
 		0x01 => *expr = named_func("parallel_array_str"),
+		0x01000006 => *expr = named_func("field_exists"),
 		0x01000007 => *expr = named_func("get_int_field"),
 		0x01000008 => *expr = named_func("get_str_field"),
 		0x0100000C => *expr = named_func("exists"),
@@ -552,9 +577,15 @@ mod special {
 			0x09 => *expr = named_func("lerp"),
 			0x0a => *expr = named_func("clamp"),
 			0x0b => *expr = named_func("to_string_padded"),
+			0x0c => *expr = named_func("to_string_full_width"),
 			0x0e => *expr = named_func("sqrt_mult"), // sqrt_mult(a, b) = sqrt(a) * b
 			0x14 => *expr = named_func("logarithm"), // logarithm is base 2 with constant mult
 			0x16 => *expr = named_func("get_angle"),
+			// 0x18 => *expr = named_func("num_digits"),
+			0x19 => *expr = named_func("prod_div"),
+			// 0x01000000 - sign
+			// 0x01000002 - to_str_comma
+			// 0x01000003 - to_str_comma_full_width
 			_ => warn!("Unrecognised math function {:#x}", index)
 		}
 	}
@@ -563,10 +594,13 @@ mod special {
 		match index {
 			0x01000001 => *expr = named_func("get_date_info"),
 			0x01000002 => *expr = named_func("get_unix_time"),
+			0x01000012 => *expr = named_func("check_web_view"),
 			0x01000014 => *expr = named_func("get_screen_height"),
 			0x01000015 => *expr = named_func("get_screen_width"),
 			//0x01000016 => *expr = named_func("get_screen_size"),
 			0x0B => *expr = named_func("log"),
+			0x14 => *expr = named_func("get_app_version"),
+			0x23 => *expr = named_func("get_advertising_id"),
 			_ => warn!("Unrecognised system function {:#x}", index)
 		}
 	}

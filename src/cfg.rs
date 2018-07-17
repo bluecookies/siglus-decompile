@@ -160,32 +160,6 @@ impl ControlFlowGraph {
 	}
 
 
-	// Identify loops, header and latching nodes
-	// and the type of loop (TODO)
-	// TODO: test this for nested loops
-	fn structure_loops(&mut self) {
-		trace!("Structuring loops...");
-		let deriv_seq = derived_sequence(&self.graph, self.entry);
-
-		trace!("Finding loops...");
-		for (i, (graph, intervals)) in deriv_seq.iter().enumerate() {
-			// For each interval header, check if any of its predecessors
-			// are inside that interval
-			for interval in intervals.iter() {
-				let header = graph[interval.header];
-				let mut pred = graph.neighbors_directed(header, Direction::Incoming);
-				// TODO: && not in_loop(p)
-				if let Some(latching_node) = pred.find(|p| interval.contains(p)) {
-					if i != 0 {
-						warn!("TODO: check nested loop ({}): might be funky", i);
-					}
-					self.add_loop(header, latching_node, &interval);
-				}
-			}
-		}
-		trace!("Found {} loops", self.loops.len());
-	}
-
 	// Determine follow nodes for 2-way conditional nodes
 	// This step must be done after loops are found or weirdness will ensue
 	fn structure_ifs(&mut self) {
@@ -259,105 +233,6 @@ impl ControlFlowGraph {
 		self.loop_latch.get(&node) == Some(&node)
 	}
 
-	fn add_loop(&mut self, head: NodeIndex, latch: NodeIndex, interval: &Interval) {
-		// TODO: debug!("Loop found! Head: {} Latch: {}", head.index(), latch.index());
-
-		let mut nodes_in_loop = HashSet::new();
-			nodes_in_loop.insert(head);
-
-		self.loop_head.insert(head, head);
-		self.loop_latch.insert(latch, latch);
-		// Iterate through head + 1 to latch
-		let mut rpo = self.post_order().into_iter().rev();
-		rpo.find(|&node| node == head);	// `find` consumes the one found and continues on the next one
-		while let Some(node) = rpo.next() {
-			if interval.contains(&node) {
-				nodes_in_loop.insert(node);
-				self.loop_head.entry(node).or_insert(head);
-				self.loop_latch.entry(node).or_insert(latch);
-			}
-
-			if node == latch {
-				break;
-			}
-		}
-
-		// Find loop type
-		let loop_type = {
-			let num_succ_latch = self.graph.neighbors(latch).count();
-			let num_succ_head = self.graph.neighbors(head).count();
-
-			if num_succ_latch == 2 {
-				if num_succ_head == 2 {
-					let mut succ = self.graph.neighbors(head);
-					let succ_1 = succ.next().unwrap();
-					let succ_2 = succ.next().unwrap();
-					if nodes_in_loop.contains(&succ_1) && nodes_in_loop.contains(&succ_2) {
-						LoopType::PostTested
-					} else {
-						LoopType::PreTested
-					}
-				} else {
-					LoopType::PostTested
-				}
-			} else {
-				if num_succ_head == 2 {
-					LoopType::PreTested
-				} else {
-					LoopType::Endless
-				}
-			}
-		};
-
-		// Find loop follow
-		let loop_follow = {
-			match loop_type {
-				LoopType::PreTested => {
-					let mut succ = self.graph.neighbors(head);
-					let succ_1 = succ.next().unwrap();
-					if nodes_in_loop.contains(&succ_1) {
-						succ.next().unwrap()
-					} else {
-						succ_1
-					}
-				}, 
-				LoopType::PostTested => {
-					let mut succ = self.graph.neighbors(latch);
-					let succ_1 = succ.next().unwrap();
-					if nodes_in_loop.contains(&succ_1) {
-						succ.next().unwrap()
-					} else {
-						succ_1
-					}
-				},
-				_ => panic!()
-			}
-		};
-
-		let condition = {
-			match loop_type {
-				LoopType::PreTested => {
-					self.graph[head].condition.clone().unwrap_or(Expression::Error)
-				}, 
-				LoopType::PostTested => {
-					self.graph[latch].condition.clone().unwrap_or(Expression::Error)
-				},
-				_ => panic!()
-			}
-		};
-
-		trace!("Found {:?} - Head: {}, Latch: {}, Nodes: {:?}", 
-			loop_type, head.index(), latch.index(), set2vec(&nodes_in_loop));
-
-		self.loops.push(Loop {
-			head,
-			latch,
-			nodes: nodes_in_loop,
-			loop_type,
-			loop_follow,
-			condition
-		});
-	}
 
 	// TODO: check if needs rebuilding
 	fn post_order(&mut self) -> Vec<NodeIndex> {
@@ -702,13 +577,20 @@ fn compute_intervals<N, E>(graph: &Graph<N, E>, entry: NodeIndex) -> Vec<Interva
 			work_list.push(node);
 		}
 
+		// Compute the end node of the interval
+		interval.compute_end(graph);
+
 		intervals.push(interval);
 	}
 
 	intervals
 }
 
-fn derived_sequence<N, E>(g: &Graph<N, E>, mut entry: NodeIndex) -> Vec<(Graph<NodeIndex, bool>, Vec<Interval>)> {
+
+type IntervalGraph = (Graph<NodeIndex, bool>, Vec<Interval>);
+type DerivedSequence = Vec<IntervalGraph>;
+
+fn derived_sequence<N, E>(g: &Graph<N, E>, mut entry: NodeIndex) -> DerivedSequence {
 	trace!("Generating sequence of interval derived graphs...");
 
 	let g1 = g.map(
@@ -767,6 +649,7 @@ fn derived_sequence<N, E>(g: &Graph<N, E>, mut entry: NodeIndex) -> Vec<(Graph<N
 
 		last_graph = graph;
 		trace!("\tConstructed graph G{}", i);
+		trace!("\t\t{:?}", last_graph);
 		i += 1;
 	}
 
@@ -776,9 +659,11 @@ fn derived_sequence<N, E>(g: &Graph<N, E>, mut entry: NodeIndex) -> Vec<(Graph<N
 	deriv_seq
 }
 
+#[derive(Debug)]
 struct Interval {
 	header: NodeIndex,
-	nodes: HashSet<NodeIndex>
+	nodes: HashSet<NodeIndex>,
+	end: NodeIndex,
 }
 
 impl Interval {
@@ -787,12 +672,15 @@ impl Interval {
 		nodes.insert(header);
 		Interval {
 			header,
-			nodes
+			nodes,
+			end: header
 		}
 	}
+
 	fn contains(&self, index: &NodeIndex) -> bool {
 		self.nodes.contains(index)
 	}
+
 	fn add_node(&mut self, index: NodeIndex) {
 		self.nodes.insert(index);
 	}
@@ -805,7 +693,6 @@ impl Interval {
 		succ.difference(&self.nodes).cloned().collect()
 	}
 }
-
 
 struct Loop {
 	head: NodeIndex,
@@ -1222,4 +1109,186 @@ fn construct_for_loops(block: &mut Vec<Statement>) {
 // Util
 fn set2vec(set: &HashSet<NodeIndex>) -> Vec<usize> {
 	set.iter().cloned().map(NodeIndex::index).collect::<Vec<usize>>()
+}
+
+// Kind of better
+// Kind of more general too
+// Still wrong
+// =============================================================================
+impl Interval {
+	// TODO: type check
+	fn compute_end<N, E>(&mut self, graph: &Graph<N, E>) {
+		for &node in self.nodes.iter() {
+			let mut succ = graph.neighbors_directed(node, Direction::Outgoing);
+			if succ.any(|idx| !self.nodes.contains(&idx)) {
+				self.end = node;
+			}
+		}
+	}
+
+	// index - index to node in the root graph
+	// seq - a slice of a DerivedSequence where the last element contains a graph that matches these nodes
+	// checks nested
+	fn contains_root(&self, index: &NodeIndex, seq: &[IntervalGraph]) -> bool {
+		if seq.len() > 1 {
+			let graph = &seq.last().unwrap().0;
+			let vec = &seq[seq.len() - 2].1;
+			for &node in self.nodes.iter() {
+				// Find the interval with the header that is this node
+				let header = graph[node];
+				let interval = vec.iter().find(|itvl| itvl.header == header).unwrap();
+				if interval.contains_root(index, &seq[..seq.len() - 1]) {
+					return true;
+				}
+			}
+			false
+		} else {
+			self.nodes.contains(index)
+		}
+	}
+}
+
+// Node: Node index matching last element of seq
+// Returns node index for root
+fn get_head(node: NodeIndex, seq: &[IntervalGraph]) -> NodeIndex {
+	if let Some((graph, vec)) = seq.last() {
+		let header = graph[node];
+		get_head(header, &seq[..seq.len() - 1])
+	} else {
+		node
+	}
+}
+
+// Node: Node index matching last element of seq
+// Returns node index for root
+fn get_end(node: NodeIndex, seq: &[IntervalGraph]) -> NodeIndex {
+	if seq.len() > 1 {
+		let vec = &seq[seq.len() - 2].1;
+		let graph = &seq.last().unwrap().0;
+		let interval = vec.iter().find(|itvl| itvl.header == graph[node]).unwrap();
+		get_end(interval.end, &seq[..seq.len() - 1])
+	} else {
+		let graph = &seq.last().unwrap().0;
+		graph[node]
+	}
+}
+
+impl ControlFlowGraph {
+	fn structure_loops(&mut self) {
+		trace!("Structuring loops...");
+		let deriv_seq = derived_sequence(&self.graph, self.entry);
+
+		for (i, (graph, intervals)) in deriv_seq.iter().enumerate() {
+			// For each interval header, check if any of its predecessors
+			// are inside that interval
+			for interval in intervals.iter() {
+				let header = graph[interval.header];
+				let mut pred = graph.neighbors_directed(header, Direction::Incoming);
+				// TODO: && not in_loop(p)
+				if let Some(latching_node) = pred.find(|p| interval.contains(p)) {
+					self.add_loop(header, latching_node, &interval, &deriv_seq[..i + 1]);
+				}
+			}
+		}
+	}
+
+	fn add_loop(&mut self, head: NodeIndex, latch: NodeIndex, interval: &Interval, deriv_seq: &[IntervalGraph]) {
+		let head = get_head(head, deriv_seq);
+		let latch = get_end(latch, deriv_seq);
+
+		let mut nodes_in_loop = HashSet::new();
+			nodes_in_loop.insert(head);
+
+		self.loop_head.insert(head, head);
+		self.loop_latch.insert(latch, latch);
+		// Iterate through head + 1 to latch
+		let mut rpo = self.post_order().into_iter().rev();
+		rpo.find(|&node| node == head);	// `find` consumes the one found and continues on the next one
+		while let Some(node) = rpo.next() {
+			if interval.contains_root(&node, deriv_seq) {
+				nodes_in_loop.insert(node);
+				self.loop_head.entry(node).or_insert(head);
+				self.loop_latch.entry(node).or_insert(latch);
+			}
+
+			if node == latch {
+				break;
+			}
+		}
+
+		// Find loop type
+		let loop_type = {
+			let num_succ_latch = self.graph.neighbors(latch).count();
+			let num_succ_head = self.graph.neighbors(head).count();
+
+			if num_succ_latch >= 2 {
+				if num_succ_head >= 2 {
+					let mut succ = self.graph.neighbors(head);
+					let succ_1 = succ.next().unwrap();
+					let succ_2 = succ.next().unwrap();
+					if nodes_in_loop.contains(&succ_1) && nodes_in_loop.contains(&succ_2) {
+						LoopType::PostTested
+					} else {
+						LoopType::PreTested
+					}
+				} else {
+					LoopType::PostTested
+				}
+			} else {
+				if num_succ_head == 2 {
+					LoopType::PreTested
+				} else {
+					LoopType::Endless
+				}
+			}
+		};
+
+		// Find loop follow - currently this is wrong and might pick a node that is earlier
+		let loop_follow = {
+			match loop_type {
+				LoopType::PreTested => {
+					let mut succ = self.graph.neighbors(head);
+					let succ_1 = succ.next().unwrap();
+					if nodes_in_loop.contains(&succ_1) {
+						succ.next().unwrap()
+					} else {
+						succ_1
+					}
+				}, 
+				LoopType::PostTested => {
+					let mut succ = self.graph.neighbors(latch);
+					let succ_1 = succ.next().unwrap();
+					if nodes_in_loop.contains(&succ_1) {
+						succ.next().unwrap()
+					} else {
+						succ_1
+					}
+				},
+				_ => panic!()
+			}
+		};
+
+		let condition = {
+			match loop_type {
+				LoopType::PreTested => {
+					self.graph[head].condition.clone().unwrap_or(Expression::Error)
+				}, 
+				LoopType::PostTested => {
+					self.graph[latch].condition.clone().unwrap_or(Expression::Error)
+				},
+				_ => panic!()
+			}
+		};
+
+		println!("Found {:?} - Head: {}, Latch: {}, Follow: {}, Nodes: {:?}", loop_type, head.index(), latch.index(), loop_follow.index(), set2vec(&nodes_in_loop));
+
+		self.loops.push(Loop {
+			head,
+			latch,
+			nodes: nodes_in_loop,
+			loop_type,
+			loop_follow,
+			condition
+		});
+	}
 }

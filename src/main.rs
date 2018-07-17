@@ -411,6 +411,10 @@ impl Script {
 		// Parse functions
 		let mut functions = Vec::new();
 		for &(index, address) in self.function_index.iter() {
+			let fn_name = &function_table[index].name;
+			trace!("Decompiling function: {}", fn_name);
+
+
 			let mut graph = ControlFlowGraph::function(address);
 
 			let mut block_list = vec![(address, ProgStack::new())];
@@ -419,7 +423,7 @@ impl Script {
 
 			graph.replace_ref(&global_var_table, &function_table, &local_vars);
 
-			let mut graph_out = File::create(format!("{}/{}.gv", &graph_path, &function_table[index].name)).expect("Could not create output file for writing");
+			let mut graph_out = File::create(format!("{}/{}.gv", &graph_path, fn_name)).expect("Could not create output file for writing");
 			graph.write_graph(&mut graph_out).unwrap_or_else(|e| error!("{}", e));
 
 
@@ -428,7 +432,7 @@ impl Script {
 			local_vars.truncate(num_params);
 
 			let prototype = FunctionPrototype {
-				name: function_table[index].name.clone(),
+				name: fn_name.clone(),
 				parameters: local_vars
 			};
 

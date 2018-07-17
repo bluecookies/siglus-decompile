@@ -309,10 +309,11 @@ fn main() {
 		
 		let script = Script::new(Cursor::new(scene), &scene_name).expect("Could not parse script");
 
-		let mut graph_out = File::create(format!("Scene/{}.gv", &scene_name)).expect("Could not create output file for writing");
+		let graph_path = format!("Scene/{}", &scene_name);
+		std::fs::create_dir_all(&graph_path).expect("Could not create graph output directory!");
 
 		// Construct file structure
-		let source_file = script.decompile(&global_vars, &global_functions, &mut graph_out).expect("Error parsing bytecode.");
+		let source_file = script.decompile(&global_vars, &global_functions, graph_path).expect("Error parsing bytecode.");
 
 		let mut out = File::create(format!("Scene/{}.ss", &scene_name)).expect("Could not create output file for writing");
 		source_file.write(&mut out).expect("Error writing file.");	
@@ -377,7 +378,7 @@ struct Script {
 }
 
 impl Script {
-	fn decompile<F: Write>(&self, global_vars: &Vec<Variable>, global_funcs: &Vec<Function>, graph_out: &mut F) -> Result<SourceFile> {
+	fn decompile(&self, global_vars: &Vec<Variable>, global_funcs: &Vec<Function>, graph_path: String) -> Result<SourceFile> {
 		// Create function index from global functions + static functions
 		let mut function_table = global_funcs.to_vec();
 		function_table.extend_from_slice(&self.static_funcs);
@@ -400,7 +401,8 @@ impl Script {
 
 			graph.replace_ref(&global_var_table, &function_table, &[]);
 
-			graph.write_graph(graph_out).unwrap_or_else(|e| error!("{}", e));
+			let mut graph_out = File::create(format!("{}/{}.gv", &graph_path, "main")).expect("Could not create output file for writing");
+			graph.write_graph(&mut graph_out).unwrap_or_else(|e| error!("{}", e));
 
 			// Structure loops and two ways and everything else
 			graph.structure_statements()
@@ -416,6 +418,9 @@ impl Script {
 			let (num_params, mut local_vars) = self.parse_bytecode(block_list, &mut graph)?.unwrap();
 
 			graph.replace_ref(&global_var_table, &function_table, &local_vars);
+
+			let mut graph_out = File::create(format!("{}/{}.gv", &graph_path, &function_table[index].name)).expect("Could not create output file for writing");
+			graph.write_graph(&mut graph_out).unwrap_or_else(|e| error!("{}", e));
 
 
 			let block = graph.structure_statements();
@@ -680,6 +685,7 @@ impl Script {
 						for _ in 0..num_extra {
 							extra_params.push(bytecode.read_u32::<LittleEndian>()?);
 						}
+						extra_params.reverse();
 
 						let return_type = VariableType::from_u32(bytecode.read_u32::<LittleEndian>()?);
 
@@ -765,7 +771,7 @@ fn create_variable(value: Expression) -> (Expression, Instruction) {
 // of the instructions not known without looking at the stack
 fn check_function_extra(function: &Expression) -> bool {
 	if let &Expression::System(f) = function {
-		if f == 0xc || f == 0x12 || f == 0x4c {
+		if f == 0xc || f == 0x12 || f == 0x13 || f == 0x4c {
 			true
 		} else {
 			false

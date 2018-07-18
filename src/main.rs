@@ -34,10 +34,10 @@ use getopts::Options;
 type Result<T> = std::result::Result<T, Box<std::error::Error>>;
 
 mod decrypt;
-mod cfg;
+mod control_flow;
 mod expression;
 mod stack;
-use cfg::{ControlFlowGraph, Instruction, Statement};
+use control_flow::{ControlFlowGraph, Instruction, Statement};
 use expression::{Expression, FunctionType};
 use decrypt::read_scene_pack_header;
 use stack::ProgStack;
@@ -331,7 +331,7 @@ struct FunctionPrototype {
 
 impl std::fmt::Display for FunctionPrototype {
 	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-		write!(f, "{}({})", self.name, format_list(&self.parameters))
+		write!(f, "{}({})", self.name, format_list(self.parameters.iter()))
 	}
 }
 
@@ -793,8 +793,8 @@ fn zip<A, B>(a: A, b: B) -> std::iter::Zip<<A as IntoIterator>::IntoIter, <B as 
 	a.into_iter().zip(b)
 }
 
-fn format_list<T: std::fmt::Display>(list: &[T]) -> String {
-	let mut it = list.iter();
+fn format_list<T: std::fmt::Display>(list: impl Iterator<Item = T>) -> String {
+	let mut it = list.into_iter();
 	if let Some(elem) = it.next() {
 		let mut comma_separated = elem.to_string();
 

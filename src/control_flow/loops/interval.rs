@@ -1,4 +1,5 @@
 use std::collections::{HashSet, HashMap};
+use std::fmt;
 
 use petgraph::Direction;
 use petgraph::graph::{Graph, NodeIndex};
@@ -7,12 +8,24 @@ use petgraph::algo::is_isomorphic;
 
 use super::{Loop, get_loop_type, get_loop_follow};
 
+use format_list;
+
 struct Interval {
 	header: NodeRef,
 	root_start: NodeIndex,
 	nodes: HashSet<NodeRef>,
 	root_end: Option<NodeIndex>,
 }
+
+impl fmt::Display for Interval {
+	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+		write!(f, "Header: {:?} ", self.header)?;
+		write!(f, "Head:{} End: {:?} ", self.root_start.index(), self.root_end.map(NodeIndex::index))?;
+		write!(f, "Nodes: {{{}}} \n", format_list(self.nodes.iter()))?;
+		Ok(())
+	}
+}
+
 
 #[derive(PartialEq, Eq, Hash, Copy, Clone, Debug)]
 struct IntervalRef {
@@ -35,18 +48,28 @@ pub struct IntervalData<'a, N: 'a, E: 'a> {
 
 	// Reference to a graph with the original nodes
 	graph: &'a Graph<N, E>,
-
-	// List of root nodes in post ordering
-	post_order: Vec<NodeIndex>,
 	// Original definition
 	// G1 == graph,           I1 == deriv_seq[0]
 	// G2 == itvl_graphs[0],  I2 == deriv_seq[1]
+
+	// List of root nodes in post ordering
+	post_order: Vec<NodeIndex>,
+	rpo: HashMap<NodeIndex, usize>,
 }
 
 #[derive(PartialEq, Eq, Hash, Copy, Clone, Debug)]
 enum NodeRef {
 	Interval(IntervalRef),
 	RootNode(NodeIndex),
+}
+
+impl fmt::Display for NodeRef {
+	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+		match *self {
+			NodeRef::RootNode(i) => write!(f, "Root({})", i.index()),
+			NodeRef::Interval(i) => write!(f, "IntRef({}, {})", i.idx, i.level),
+		}
+	}
 }
 
 impl From<IntervalRef> for NodeRef {
@@ -63,13 +86,23 @@ impl From<NodeIndex> for NodeRef {
 
 impl<'a, N, E> IntervalData<'a, N, E> {
 	pub fn new(graph: &'a Graph<N, E>, entry: NodeIndex) -> Self {
+		let post_order: Vec<NodeIndex> = DfsPostOrder::new(graph, entry).iter(graph).collect();
+		let rpo: HashMap<NodeIndex, usize> = 
+			post_order
+				.iter()
+				.rev()
+				.enumerate()
+				.map(|(i, &node)| (node, i))
+				.collect();
+
 		let mut data = IntervalData {
 			intervals: Vec::new(),
 			deriv_seq: Vec::new(),
 			interval_graphs: Vec::new(),
 
 			graph,
-			post_order: DfsPostOrder::new(graph, entry).iter(graph).collect()
+			post_order,
+			rpo
 		};
 		data.construct(entry);
 
@@ -148,7 +181,8 @@ impl<'a, N, E> IntervalData<'a, N, E> {
 			));
 
 			last_graph = graph;
-			trace!("\tConstructed graph G{}", n);
+			trace!("\tConstructed graph G{}", n + 1);
+			trace!("\tIntervals: {}", format_list(self.deriv_seq.last().unwrap().iter().map(|i_ref| &self.intervals[i_ref.idx].0)));
 			n += 1;
 		}
 
@@ -244,7 +278,7 @@ impl<'a, N, E> IntervalData<'a, N, E> {
 		succ.difference(nodes).cloned().collect()
 	}
 
-	fn post_order(&'a self) -> impl DoubleEndedIterator<Item = NodeIndex> + 'a {
+	fn post_order(&'a self) -> impl DoubleEndedIterator<Item = NodeIndex> + Clone + 'a {
 		self.post_order.iter().cloned()
 	}
 
@@ -258,8 +292,14 @@ impl<'a, N, E> IntervalData<'a, N, E> {
 				let mut pred = self.get_pred(header).into_iter();
 				// Check if any of them lie inside the interval
 				if let Some(latch) = pred.find(|p| self.contains(interval, p)) {
-					let head = self.get_head(interval.into()).unwrap();
-					let latch = self.get_end(latch.into()).unwrap();
+					let head = match self.get_head(interval.into()) {
+						Some(head) => head,
+						None => panic!("Interval header has no head: {:?}", interval)
+					};
+					let latch = match self.get_end(latch.into()) {
+						Some(latch) => latch,
+						None => panic!("Latch node has no end: {:?}", latch)
+					};
 					loops.push(self.create_loop(head, latch, interval));
 				}
 			}
@@ -273,23 +313,52 @@ impl<'a, N, E> IntervalData<'a, N, E> {
 		let mut nodes_in_loop = HashSet::new();
 			nodes_in_loop.insert(head);
 
+		// EDIT: this is flawed
+		// there are graphs where a valid post ordering has nodes outside the loop
+		// between the latch node and the header
 		// Iterate through head + 1 to latch
-		let mut rpo = self.post_order().rev();
-		rpo.find(|&node| node == head);	// `find` consumes the one found and continues on the next one
-		while let Some(node) = rpo.next() {
-			if self.contains_root(interval, node) {
+		// let mut rpo = self.post_order().rev();
+		// rpo.find(|&node| node == head);	// `find` consumes the one found and continues on the next one
+		// while let Some(node) = rpo.next() {
+		// 	if self.contains_root(interval, node) {
+		// 		nodes_in_loop.insert(node);
+		// 	}
+		// 	if node == latch {
+		// 		break;
+		// 	}
+		// }
+
+		// March backwards through the root graph
+		// starting from the latch node
+		// adding all nodes that are predecessors
+		// and lie in the correct range
+		let start = self.get_rpo(&head);
+		let end = self.get_rpo(&latch);
+		let mut to_visit = HashSet::new();
+			to_visit.insert(latch);
+		// While there are more nodes
+		while !to_visit.is_subset(&nodes_in_loop) {
+			let mut temp = HashSet::new();
+			for node in to_visit.drain() {
 				nodes_in_loop.insert(node);
+				for pred in self.graph.neighbors_directed(node, Direction::Incoming) {
+					if self.contains_root(interval, pred) {
+						let rpo = self.get_rpo(&pred);
+						if start < rpo && rpo <= end {
+							temp.insert(pred);
+						}
+					}
+				}
 			}
-			if node == latch {
-				break;
-			}
+			to_visit = temp;
 		}
+
 
 		// Find loop type
 		let loop_type = get_loop_type(head, latch, &nodes_in_loop, &self.graph);
 
 		// Find loop follow - currently this is wrong and might pick a node that is earlier
-		let loop_follow = get_loop_follow(loop_type, head, latch, &nodes_in_loop, &self.graph).unwrap();
+		let loop_follow = get_loop_follow(loop_type, head, latch, &nodes_in_loop, &self.graph);
 
 		let l = Loop {
 			head,
@@ -359,5 +428,10 @@ impl<'a, N, E> IntervalData<'a, N, E> {
 			NodeRef::RootNode(idx) => idx,
 			NodeRef::Interval(r) => self.intervals[r.idx].1
 		}
+	}
+
+	// Gets the reverse post ordering of the root node
+	fn get_rpo(&self, node: &NodeIndex) -> usize {
+		self.rpo[node]
 	}
 }

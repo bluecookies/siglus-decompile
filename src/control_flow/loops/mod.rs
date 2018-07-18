@@ -15,7 +15,7 @@ pub struct Loop {
 	pub latch: NodeIndex,
 	pub nodes: HashSet<NodeIndex>,
 	pub loop_type: LoopType,
-	pub loop_follow: NodeIndex,
+	pub loop_follow: Option<NodeIndex>,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -69,7 +69,7 @@ fn get_loop_follow<N, E>(loop_type: LoopType, head: NodeIndex, latch: NodeIndex,
 impl fmt::Display for Loop {
 	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
 		write!(f, "{:?} ", self.loop_type)?;
-		write!(f, "Head: {} Latch: {} Follow: {}\n", self.head.index(), self.latch.index(), self.loop_follow.index())?;
+		write!(f, "Head: {} Latch: {} Follow: {:?}\n", self.head.index(), self.latch.index(), self.loop_follow.map(NodeIndex::index))?;
 		write!(f, "Nodes: {{{}}} \n", format_list(self.nodes.iter().cloned().map(NodeIndex::index)))?;
 		Ok(())
 	}

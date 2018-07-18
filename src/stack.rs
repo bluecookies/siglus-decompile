@@ -150,7 +150,7 @@ impl ProgStack {
 				} else {
 					self.handle_frame().unwrap()
 				}
-			}
+			},
 		}
 	}
 }

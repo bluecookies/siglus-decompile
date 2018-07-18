@@ -3,8 +3,8 @@ use std;
 use ::Variable;
 use ::VariableType;
 use ::Function;
-use ::cfg::Instruction;
-use ::format_list;
+use Instruction;
+use format_list;
 
 ////////////////////////////////////////////////////////////////////////////////
 #[derive(Clone, Debug, PartialEq)]
@@ -111,8 +111,9 @@ impl Expression {
 			Expression::RawString(_) => VariableType::Str,
 			Expression::Variable(Variable { var_type, .. }) => var_type,
 			Expression::UnaryExpr { ref value, .. } => value.get_type(),	// temp
-			Expression::BinaryExpr { ref lhs, op, .. } => {
+			Expression::BinaryExpr { ref lhs, ref rhs, op, .. } => {
 				match op {
+					// TODO: check
 					BinaryOp::Index => match lhs.get_type() {
 						VariableType::IntList(_) => VariableType::Int,
 						VariableType::StrList(_) => VariableType::Str,
@@ -123,13 +124,14 @@ impl Expression {
 						}
 					}
 					BinaryOp::Eq | BinaryOp::Neq | BinaryOp::And | BinaryOp::Or => VariableType::Int,
+					BinaryOp::Member => rhs.get_type(),
 					_ => lhs.get_type()
 				}
 			},
 			Expression::Function(_) => panic!(),
 			Expression::FunctionCall { return_type, .. } => return_type,
 			Expression::System(_) => VariableType::Unknown,
-			Expression::List(_) => VariableType::Unknown,
+			Expression::List(_) => VariableType::Unknown,	// TODO: check
 			Expression::Error => VariableType::Error,
 
 			Expression::LocalVarRef(_) |
@@ -339,7 +341,7 @@ impl std::fmt::Display for Expression {
 	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
 		match *self {
 			Expression::RawInt(num) => write!(f, "{}", num),
-			Expression::RawString(ref string) => write!(f, "\"{}\"", string),
+			Expression::RawString(ref string) => write!(f, "\"{}\"", string),	// TODO: might need to escape
 			Expression::Variable(Variable {ref name, .. }) => write!(f, "{}", name),
 			Expression::UnaryExpr{ref value, op} => {
 				if self.precedence() > value.precedence() {
@@ -386,12 +388,15 @@ impl std::fmt::Display for Expression {
 				ref function, option, ref args, ref extra_params, extra, ..
 			} => {
 				let option_str = if option == 0 { String::new() } else { format!("{{{}}}", option) };
-				let extra_param_str = if extra_params.is_empty() { String::new() } else { format!("<{}>", format_list(extra_params)) };
+				let extra_param_str = if extra_params.is_empty() { String::new() } else { format!("<{}>", format_list(extra_params.iter())) };
 				let extra_str = if let Some(extra) = extra { format!(", {}", extra) } else { String::new() };
-				write!(f, "{}{}({}){}{}", function, option_str, format_list(args), extra_param_str, extra_str)
+				if let &Expression::Variable(_) = function.as_ref() {
+					warn!("Function {} is a variable", function);
+				}
+				write!(f, "{}{}({}){}{}", function, option_str, format_list(args.iter()), extra_param_str, extra_str)
 			},
 			Expression::System(num) => write!(f, "sys_{:#x}", num),
-			Expression::List(ref vec) => write!(f, "{{{}}}", format_list(vec)),
+			Expression::List(ref vec) => write!(f, "{{{}}}", format_list(vec.iter())),
 			Expression::Error => write!(f, "ERROR"),
 
 			Expression::LocalVarRef(idx) => write!(f, "local_var[{}]", idx),
@@ -448,12 +453,12 @@ impl std::fmt::LowerHex for Expression {
 				ref function, option, ref args, ref extra_params, extra, ..
 			} => {
 				let option_str = if option == 0 { String::new() } else { format!("{{{}}}", option) };
-				let extra_param_str = if extra_params.is_empty() { String::new() } else { format!("<{}>", format_list(extra_params)) };
+				let extra_param_str = if extra_params.is_empty() { String::new() } else { format!("<{}>", format_list(extra_params.iter())) };
 				let extra_str = if let Some(extra) = extra { format!(", {}", extra) } else { String::new() };
-				write!(f, "{:#x}{}({}){}{}", function.as_ref(), option_str, format_list(args), extra_param_str, extra_str)
+				write!(f, "{:#x}{}({}){}{}", function.as_ref(), option_str, format_list(args.iter()), extra_param_str, extra_str)
 			},
 			Expression::System(num) => write!(f, "sys_{:#x}", num),
-			Expression::List(ref vec) => write!(f, "{{{}}}", format_list(vec)),
+			Expression::List(ref vec) => write!(f, "{{{}}}", format_list(vec.iter())),
 			Expression::Error => write!(f, "ERROR"),
 
 			Expression::LocalVarRef(idx) => write!(f, "local_var[{}]", idx),

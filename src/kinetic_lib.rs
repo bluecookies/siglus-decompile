@@ -249,17 +249,18 @@ mod display {
 	pub fn replace_table(expr: &mut Expression, index: i32) {
 		match index {
 			0x01000000 => *expr = var_expr("groups", KineticType::GroupList),
+			0x01000002 => *expr = named_func("delete"),
 			0x01000001 => *expr = named_func("create"),
 			0x01000003 => *expr = named_func("exists"),
 			0x01000004 => *expr = named_func("set_anime_on"),
 			0x01000005 => *expr = named_func("set_anime_off"),
-			//0x01000007 => *expr = int_var_expr("dp_pos_x"),
-			//0x01000008 => *expr = int_var_expr("dp_pos_y"),
-			//0x01000009 => *expr = int_var_expr("dp_tr"),
-			//0x0100000A => *expr = var_expr("dp_pos_x_event_pointer", KineticType::IntPointer),
-			//0x0100000B => *expr = var_expr("dp_pos_y_event_pointer", KineticType::IntPointer),
-			//0x0100000C => *expr = var_expr("dp_tr_event_pointer", KineticType::IntPointer),
-			//0x01000011 => *expr = "btn_id",
+			0x01000007 => *expr = int_var_expr("dp_pos_x"),
+			0x01000008 => *expr = int_var_expr("dp_pos_y"),
+			0x01000009 => *expr = int_var_expr("dp_tr"),
+			0x0100000A => *expr = var_expr("dp_pos_x_event_pointer", KineticType::IntPointer),
+			0x0100000B => *expr = var_expr("dp_pos_y_event_pointer", KineticType::IntPointer),
+			0x0100000C => *expr = var_expr("dp_tr_event_pointer", KineticType::IntPointer),
+			0x01000011 => *expr = int_var_expr("btn_id"),
 			_ => warn!("Unrecognised table field {:#x}", index)
 		}
 	}

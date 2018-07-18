@@ -108,7 +108,7 @@ impl StatementConstructor {
 						let condition = cfg.graph[loop_ref.head].condition.clone().unwrap();
 
 						let (then_index, else_index) = cfg.get_then_else(loop_ref.head).unwrap();
-						let (succ, condition) = if loop_ref.loop_follow == else_index {
+						let (succ, condition) = if loop_ref.loop_follow == Some(else_index) {
 							(then_index, condition)
 						} else {
 							(else_index, condition.negate())
@@ -148,8 +148,9 @@ impl StatementConstructor {
 						}
 
 						self.latch_node.push(loop_ref.latch);
-						let succ = cfg.graph.neighbors(index).next().unwrap();
-						loop_contents.extend(self.construct_statements(cfg, succ));
+						for succ in cfg.graph.neighbors(index) {
+							loop_contents.extend(self.construct_statements(cfg, succ));
+						}
 						self.latch_node.pop();
 
 
@@ -157,7 +158,7 @@ impl StatementConstructor {
 						//	i.e. the `then` block is outside the loop
 						let (_, else_index) = cfg.get_then_else(loop_ref.latch).unwrap();
 						let condition = cfg.graph[loop_ref.latch].condition.clone().unwrap();
-						let condition = if loop_ref.loop_follow == else_index {
+						let condition = if loop_ref.loop_follow == Some(else_index) {
 							condition
 						} else {
 							condition.negate()
@@ -171,12 +172,14 @@ impl StatementConstructor {
 							line_num: None
 						}
 					},
-					LoopType::Endless => panic!("Endless loop statement!"),
+					LoopType::Endless => {
+						panic!("Endless loops not supported yet!");
+					},
 				};
 
 				// Continue with follow
 				result.push(loop_statement);
-				block_id = Some(loop_ref.loop_follow);
+				block_id = loop_ref.loop_follow;
 			} else {
 				for inst in block.instructions.iter() {
 					if let &Instruction::Line(line) = inst {
